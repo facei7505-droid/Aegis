@@ -71,10 +71,8 @@ def test_php_close_to_end_of_life_is_a_warning():
     assert any(f.title.startswith("PHP 8.2 скоро") and f.severity == "medium" for f in r.findings)
 
 
-def test_untrusted_certificate_is_reported(tmp_path):
-    pytest.importorskip("cryptography")
-    from tests.test_proxy import _cert
-    cert, key = _cert(tmp_path, "shop.test")
+def test_untrusted_certificate_is_reported(tmp_path, make_cert):
+    cert, key = make_cert(tmp_path, "shop.test")
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(cert, key)
     srv = serve(page_handler([("Strict-Transport-Security", "max-age=31536000"), ("X-Frame-Options", "DENY"),
