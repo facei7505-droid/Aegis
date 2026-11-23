@@ -11,10 +11,11 @@
   ]
  },
  "block_mode_wordpress_preset": {
-  "requests": 2247,
+  "requests": 2249,
   "blocked": 0,
   "steps_ok": 21,
-  "steps": 21
+  "steps": 21,
+  "note": "after review round 4 fixes"
  },
  "attacks_block_mode": {
   "brute_force": {
@@ -36,6 +37,18 @@
   "spoofed_editor_post": {
    "status": 401,
    "wordpress_answer": "{\"code\":\"rest_cannot_create\",\"message\":\"Sorry, you are not allowed to create posts as this user.\",\"data\":{\"status\":401}}"
+  },
+  "bypass_attempts": {
+   "/health/../?author=1": 403,
+   "?author=1 + forged editor cookie": 403,
+   "REST users + forged cookie": 403,
+   "/index.php?rest_route=/wp/v2/users": 403,
+   "/wp-json/wp/v2/users/1": 403,
+   "//wp-content//uploads/x.php": 403,
+   "/a/%2e%2e/wp-content/debug.log": 403,
+   "users?who=authors + forged cookie (answered by WordPress)": "401 rest_forbidden_who",
+   "password guessing via /wp-login.php/x.css": "refused from attempt 11",
+   "chunked comment with <script>": 403
   },
   "flood": {
    "requests": 400,

@@ -66,9 +66,17 @@ def test_visitor_comment_is_inspected_fully():
 
 @pytest.mark.parametrize("method,target,body,cookie,blocked", [
     ("GET", "/?author=1", b"", "", True),
-    ("GET", "/?author=1", b"", WP_COOKIE, False),
+    ("GET", "/?author=1", b"", WP_COOKIE, True),            # a cookie name proves nothing to a proxy
     ("GET", "/?rest_route=/wp/v2/users", b"", "", True),
-    ("GET", "/wp-json/wp/v2/users?who=authors", b"", WP_COOKIE, False),
+    ("GET", "/?rest_route=/wp/v2/users", b"", WP_COOKIE, True),
+    ("GET", "/index.php?rest_route=/wp/v2/users", b"", "", True),
+    ("GET", "/some-page/?rest_route=/wp/v2/users/1", b"", "", True),
+    ("GET", "/wp-json/wp/v2/users/1", b"", "", True),
+    ("GET", "/wp-json/wp/v2/users?who=authors", b"", WP_COOKIE, False),   # WordPress itself refuses these
+    ("GET", "/wp-json/wp/v2/users?context=edit&per_page=100", b"", WP_COOKIE, False),  # filters to anonymous
+    ("GET", "/wp-json/wp/v2/users?context=view", b"", WP_COOKIE, True),
+    ("GET", "/wp-json/wp/v2/users/me", b"", WP_COOKIE, False),
+    ("GET", "/wp-includes/load.php", b"", WP_COOKIE, True),
     ("GET", "/wp-content/uploads/2026/11/shell.php", b"", "", True),
     ("GET", "/wp-content/uploads/2026/11/photo.jpg", b"", "", False),
     ("GET", "/wp-content/debug.log", b"", "", True),
@@ -224,3 +232,52 @@ def test_lab_misses_are_now_caught(value):
 @pytest.mark.parametrize("value", BENIGN)
 def test_shop_text_is_not_an_attack(value):
     assert analyze([("query", "s", value)], 0.8) is None
+
+
+# -------------------------------------------- bypasses found in review (round 4) --
+
+@pytest.mark.parametrize("target", [
+    "/health/../x?id=1%27%20UNION%20SELECT%20pass%20FROM%20users--",
+    "/metrics/../../../../etc/passwd",
+    "/healthz/../wp-content/uploads/shell.php",
+    "/health/..%2fx?id=1%27%20UNION%20SELECT%20pass%20FROM%20users--",
+])
+def test_skip_paths_cannot_be_used_as_a_tunnel(target):
+    assert check(shield(preset="wordpress"), "GET", target).blocked
+
+
+def test_skip_paths_still_skip():
+    core = shield(preset="wordpress", rate_limit=1)
+    assert not any(check(core, "GET", "/healthz").blocked for _ in range(5))
+
+
+@pytest.mark.parametrize("target,method", [
+    ("//bitrix//tools/vote/uf.php", "POST"), ("/x/../bitrix/tools/vote/uf.php", "POST"),
+    ("/bitrix/tools/vote/uf.php;.css", "POST"), ("/BITRIX/tools/vote/UF.PHP", "POST"),
+    ("/upload/iblock/%2e%2e/x.php", "GET"), ("/wp-content/uploads/a.php.", "GET"),
+])
+def test_patches_see_the_path_the_server_runs(target, method):
+    preset_name = "bitrix" if "bitrix" in target.lower() or "upload/" in target else "wordpress"
+    verdict = check(shield(preset=preset_name), method, target)
+    assert verdict.blocked and verdict.incident.attack_type in ("virtual_patch", "path_traversal")
+
+
+def test_php_path_info_is_not_a_static_file(monkeypatch):
+    monkeypatch.setattr(core_mod.time, "time", lambda: 3_000_000.0)
+    core = shield(preset="wordpress", rate_limit=5, login_limit=3)
+    assert any(check(core, "GET", f"/wp-login.php/x{i}.css").blocked for i in range(8))     # counted as pages
+    form, ctype = b"log=admin&pwd=x", "application/x-www-form-urlencoded"
+    core = shield(preset="wordpress", login_limit=3)
+    codes = [check(core, "POST", "/wp-login.php/a.css", form, ctype).status for _ in range(6)]
+    assert 429 in codes
+
+
+def test_forwarded_for_is_only_trusted_from_our_proxies():
+    core = shield(trust_proxy=True)
+    assert core.client_ip("172.18.0.3", "203.0.113.9") == "203.0.113.9"      # Caddy in Docker
+    assert core.client_ip("127.0.0.1", "198.51.100.7, 203.0.113.9") == "203.0.113.9"
+    assert core.client_ip("45.9.20.17", "203.0.113.9") == "45.9.20.17"        # a client straight from the internet
+    assert core.client_ip("127.0.0.1", "unknown") == "127.0.0.1"
+    assert core.client_ip("127.0.0.1", "203.0.113.9:443") == "127.0.0.1"
+    assert ShieldCore(ShieldConfig(trust_proxy=True, trusted_proxies=("192.0.2.0/24",))).client_ip(
+        "127.0.0.1", "203.0.113.9") == "127.0.0.1"

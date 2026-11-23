@@ -128,3 +128,42 @@ One false positive was found this way and fixed: at `--level 3` sqlmap sends `Re
   blocking them would block real users. They count as misses here.
 - A signature shield is the first layer. The point of Aegis is the second one: the hole in the code is
   patched, so a payload the shield misses still finds nothing to exploit.
+
+## WordPress lab: a real CMS behind Aegis Edge (v1.3)
+
+A real WordPress (github.com/WordPress/WordPress, SQLite, PHP 8.3) behind the gateway with the
+`wordpress` preset, driven by Google Chrome through Playwright. Scripts: `benchmarks/wordpress/`;
+numbers: `benchmarks/data/wordpress_lab.json`.
+
+**Ordinary work, block mode.** Install, log in, quick draft, the block editor, a post with a Kaspi
+button (`onclick`), a Yandex map iframe and an SQL sample, a page with a Yandex.Metrika counter,
+autosaves, Cyrillic categories, settings with quotes, the comment blocklist, a user named O'Brien,
+a profile bio with links, a photo upload, plugins, a navigation menu, export, visitor searches with
+quotes and symbols, a comment with an emoji and a Kazakh name, an admin reply, the customizer:
+**21 of 21 steps, 0 of 2,247 requests blocked.** With signatures alone (no preset) 3 of those
+requests would have been blocked: the post, the Metrika page and the blocklist setting.
+
+**Attacks, block mode** (each scenario from its own address):
+
+| | |
+| --- | --- |
+| 40 password guesses on wp-login.php | 10 reach WordPress, 30 refused with 429; the same address still reads the site |
+| xmlrpc `system.multicall` (200 passwords) and `pingback.ping` | 403, 403 |
+| `?author=1`, REST `/wp/v2/users` (both URL forms) | 403 (allowed for signed-in editors) |
+| `/wp-content/uploads/…/x.php`, `debug.log`, `wp-config.php.bak`, WPScan user-agent | 403 |
+| Fake editor cookie + `<script>` post via REST | Aegis lets the markup through; WordPress refuses (401) |
+| 400 page requests in a minute from one address | 429 after the limit (300 page requests; redirects count) |
+| SecLists in search and comments: XSS / commands / LFI / SQLi | 110/110, 150/150, 126/150, 100/150 |
+
+Most SQLi "misses" are list entries that are not attacks on their own (`update`, `like`, `asc`,
+`0`); blocking those would block shoppers. Real misses found here (quote tautologies without a closing
+quote, hex-encoded `waitfor delay`, `\x27UNION`, Windows paths) became signatures, and CSIC 2010
+normal traffic stayed at 0 false alarms.
+
+**Speed.** Median added latency +2.5 ms on a WordPress page (18.4 -> 20.9 ms) and +0.8 ms on a
+static file; about 750 requests per second on 2 vCPU through Aegis with the PHP origin included,
+0 errors at 32 concurrent clients.
+
+**Not covered:** Bitrix and OpenCart presets are built from documentation and published attack
+write-ups (including 1C-Bitrix's own advice on CVE-2022-27228), not from a running Bitrix.
+

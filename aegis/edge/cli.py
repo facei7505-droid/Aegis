@@ -26,6 +26,13 @@ CADDYFILE = """# Caddy in front of Aegis Edge: HTTPS certificates for every clie
 	on_demand_tls {{
 		ask http://{aegis}/_aegis/tls-ask
 	}}
+	servers {{
+		timeouts {{
+			read_header 10s
+			read_body 120s
+			idle 2m
+		}}
+	}}
 }}
 
 https:// {{

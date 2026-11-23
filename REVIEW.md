@@ -56,3 +56,24 @@ range running. Every finding was reproduced before it was fixed; the fixes were 
 **Method note.** Every signature is now timed against 39 adversarial repeats in the test suite
 (`test_every_signature_is_linear_on_adversarial_repeats`): a new signature with an unbounded `.*` or `\s*`
 after a separator is how this class of bug comes back, and CI now catches it.
+
+## Round 4: outside review of Aegis Edge (v1.3.0)
+
+A fresh reviewer attacked the new managed-protection service with a harness of its own (real `Edge`,
+echo origin). Every finding was reproduced, fixed with a regression test, and then re-tested on the
+real WordPress lab in block mode: the owner session still passed 21 of 21 steps with 0 of 2,249
+requests blocked, and every bypass below now gets 403 (or 429) from the live site.
+
+| # | Problem | Severity | Fix | Regression test |
+| --- | --- | --- | --- | --- |
+| 1 | `/health/../anything` skipped inspection: the skip list was matched on the raw path, and the origin collapses `..` | critical | Skips, routes and virtual patches use the path the server will run (`normalize_path`: decoding, `..`, `//`, `;params`, trailing dots); a path with `..` or `%` is never skipped | `test_skip_paths_cannot_be_used_as_a_tunnel`, `test_patches_see_the_path_the_server_runs` |
+| 2 | A forged `wordpress_logged_in_` cookie switched off the user-enumeration and wp-includes patches | high | Those patches are unconditional; the editor's own author list passes because it uses `who=authors`, which WordPress refuses to anyone not signed in (checked live: 401 `rest_forbidden_who`) | `test_wordpress_virtual_patches` |
+| 3 | X-Forwarded-For was honoured from any peer when `trust_proxy` is on | medium | Honoured only when the connection comes from `trusted_proxies` (loopback and private networks by default: Caddy on the host or in Docker), and only if the hop is an IP | `test_forwarded_for_is_only_trusted_from_our_proxies` |
+| 4 | Chunked request bodies were neither inspected nor forwarded (wsgiref does not de-chunk) | medium | The server de-chunks (up to 100 MB, 400 on a malformed body) before the shield and the proxy see the request | `test_chunked_request_body_is_inspected_and_forwarded` |
+| 5 | Markup trust relies on a client-supplied marker | low | Accepted by design and documented: it only relaxes XSS on editor fields of admin endpoints, which the CMS refuses without a real login (live: forged-cookie post gets 401 from WordPress) | `test_trust_is_per_field_and_per_class` |
+| 6 | No client socket timeout (slowloris) | low | 30 s per read, at most 1,024 open connections, and Caddy header/body timeouts in the shipped Caddyfile | `test_silent_clients_are_dropped` |
+
+Found while fixing #1 (not in the report): `/index.php?rest_route=/wp/v2/users` and `/wp/v2/users/1`
+also enumerated users, and `/wp-login.php/x.css` was counted as a static file by the rate limit.
+All three are closed and tested. The reviewer also checked Telegram authorization, the control
+endpoints, cross-site routing, report escaping, stats paths and payload masking, and found no issue.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import email.parser
+import ipaddress
 import email.policy
 import io
 import json
@@ -35,6 +36,8 @@ class ShieldConfig:
     ban_window: float = 600.0
     ban_seconds: float = 900.0
     trust_proxy: bool = False           # honour X-Forwarded-For (only behind your own proxy)
+    trusted_proxies: tuple[str, ...] = ("127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+                                        "fc00::/7")  # ...and only from these addresses (your Caddy/nginx)
     proxy_hops: int = 1                 # proxies you run in front of the app; the client is that many from the right
     log_path: str | None = None         # JSON Lines incident log
     block_oversized: bool = True        # bodies above the inspection limit cannot hide payloads
@@ -78,6 +81,7 @@ class ShieldCore:
         self._lock = threading.Lock()
         from .policy import preset as _preset
         self.policy = _preset(self.config.preset)
+        self._proxy_nets = [ipaddress.ip_network(n, strict=False) for n in self.config.trusted_proxies]
         self._rate: dict[str, list] = {}               # client -> [window start, count]
         self._logins: dict[str, deque] = defaultdict(deque)
         self._locked: dict[str, float] = {}             # client -> login lockout end
@@ -158,7 +162,10 @@ class ShieldCore:
         cfg = self.config
         with self._lock:
             self.stats["requests"] += 1
-        if any(path == p or path.startswith(p.rstrip("/") + "/") for p in cfg.skip_paths):
+        from .policy import normalize_path
+        served = normalize_path(path)  # /health/../admin is /admin to the origin, so it is /admin here
+        if any(served == p.rstrip("/") or served.startswith(p.rstrip("/") + "/") for p in cfg.skip_paths) \
+                and ".." not in path and "%" not in path:
             return Verdict(False)
         now = time.time()
         with self._lock:
@@ -172,9 +179,9 @@ class ShieldCore:
         t0 = time.perf_counter()
         req = None
         if self.policy is not None or cfg.rate_limit or cfg.login_limit:
-            from .policy import STATIC, Request
+            from .policy import Request, is_static
             req = Request.build(method, path, inputs)
-            limited = self._limits(req, client, now, STATIC)
+            limited = self._limits(req, client, now, is_static)
             if limited is not None:
                 return limited
             patch = self.policy.patch(req) if self.policy else None
@@ -199,7 +206,7 @@ class ShieldCore:
         """Login lockouts and request-rate limits. Both answer 429 and never ban the whole address."""
         cfg = self.config
         block = cfg.mode == "block"
-        if cfg.rate_limit and not static.search(req.path):
+        if cfg.rate_limit and not static(req.route):
             with self._lock:
                 window = self._rate.get(client)
                 if window is None or now - window[0] >= 60:
@@ -299,12 +306,26 @@ class ShieldCore:
 
     def client_ip(self, peer: str, forwarded_for: str | None) -> str:
         """The address to judge. X-Forwarded-For is a list the client can prepend to, so only the
-        entry added by our own proxy (proxy_hops from the right) can be trusted."""
-        if not (self.config.trust_proxy and forwarded_for):
+        entry added by our own proxy (proxy_hops from the right) can be trusted, and only when the
+        connection itself comes from one of our proxies (trusted_proxies): a client that reaches the
+        shield directly must not be able to pick its own address, or someone else's."""
+        if not (self.config.trust_proxy and forwarded_for) or not self._trusted_peer(peer):
             return peer
         hops = [h.strip() for h in forwarded_for.split(",") if h.strip()]
         n = max(1, self.config.proxy_hops)
-        return hops[-n] if len(hops) >= n else (hops[0] if hops else peer)
+        chosen = hops[-n] if len(hops) >= n else (hops[0] if hops else peer)
+        try:
+            return str(ipaddress.ip_address(chosen))
+        except ValueError:  # "unknown", "1.2.3.4:5678", garbage: judge the connection instead
+            return peer
+
+    def _trusted_peer(self, peer: str) -> bool:
+        try:
+            ip = ipaddress.ip_address(peer)
+        except ValueError:
+            return False
+        nets = self._proxy_nets
+        return any(ip in net for net in nets)
 
     def is_banned(self, client: str) -> bool:
         until = self._banned.get(client)

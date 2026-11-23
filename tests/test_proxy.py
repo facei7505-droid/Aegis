@@ -218,3 +218,45 @@ def test_gateway_does_not_announce_itself(origin):
     resp, _ = through(spec)
     server = resp.getheader("Server") or ""
     assert "WSGIServer" not in server and "CPython" not in server
+
+
+def test_chunked_request_body_is_inspected_and_forwarded(origin):
+    spec = AppSpec("shop", f"http://127.0.0.1:{origin}", ["shop.kz"], preserve_host=True, heal="off")
+    gw = Gateway([spec])
+    port = free_port()
+    servers = serve(gw, port)
+    try:
+        def send(body: bytes) -> tuple[int, bytes]:
+            with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
+                chunks = b"".join(b"%x\r\n%s\r\n" % (len(part), part) for part in (body[:7], body[7:])) + b"0\r\n\r\n"
+                sock.sendall(b"POST /order HTTP/1.1\r\nHost: shop.kz\r\nContent-Type: application/x-www-form-urlencoded\r\n"
+                             b"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n" + chunks)
+                data = b""
+                while chunk := sock.recv(65536):
+                    data += chunk
+            head, _, rest = data.partition(b"\r\n\r\n")
+            return int(head.split()[1]), rest
+        status, body = send(b"q=jeans&size=32")
+        assert status == 200 and json.loads(body)["received"] == len(b"q=jeans&size=32")
+        status, _ = send(b"q=1' UNION SELECT password FROM users--")
+        assert status == 403
+    finally:
+        for s in servers:
+            s.shutdown()
+
+
+def test_silent_clients_are_dropped(origin, monkeypatch):
+    from aegis import gateway as gw_mod
+    monkeypatch.setattr(gw_mod._Handler, "timeout", 1)
+    spec = AppSpec("shop", f"http://127.0.0.1:{origin}", ["shop.kz"], preserve_host=True, heal="off")
+    port = free_port()
+    servers = serve(Gateway([spec]), port)
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
+            sock.sendall(b"GET / HTTP/1.1\r\nHost: shop.kz\r\n")   # headers never finished
+            import time as _t
+            t0 = _t.time()
+            assert sock.recv(1024) == b"" and _t.time() - t0 < 5           # the server hung up on its own
+    finally:
+        for s in servers:
+            s.shutdown()

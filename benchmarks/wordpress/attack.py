@@ -60,6 +60,34 @@ r = s.post(GW + "/?rest_route=/wp/v2/posts", json={"title": "x", "content": "<sc
            cookies={"wordpress_logged_in_fake": "admin|1|x|y"})
 out["spoofed_editor_post"] = {"status": status(r), "wordpress_answer": r.text[:120]}
 
+# 5b. Bypass attempts from the outside review (round 4): every one must be refused.
+forged = {"wordpress_logged_in_x": "admin|1|x|y"}
+bypass = {
+    "/health/../?author=1": client(13).get(GW + "/health/../?author=1", allow_redirects=False).status_code,
+    "?author=1 + forged editor cookie": client(14).get(GW + "/?author=1", cookies=forged, allow_redirects=False).status_code,
+    "REST users + forged cookie": client(15).get(GW + "/wp-json/wp/v2/users", cookies=forged).status_code,
+    "/index.php?rest_route=/wp/v2/users": client(16).get(GW + "/index.php?rest_route=/wp/v2/users").status_code,
+    "/wp-json/wp/v2/users/1": client(17).get(GW + "/wp-json/wp/v2/users/1").status_code,
+    "//wp-content//uploads/x.php": client(18).get(GW + "//wp-content//uploads/x.php").status_code,
+    "/a/%2e%2e/wp-content/debug.log": client(19).get(GW + "/a/%2e%2e/wp-content/debug.log").status_code,
+}
+# Filters only signed-in users may use: Aegis lets them through, WordPress itself must refuse them.
+r = client(20).get(GW + "/wp-json/wp/v2/users?who=authors", cookies=forged)
+bypass["users?who=authors + forged cookie (answered by WordPress)"] = f"{r.status_code} {r.json().get('code', '')}"
+s = client(21)
+codes = [s.post(GW + "/wp-login.php/x.css", data={"log": "admin", "pwd": f"g{i}"}, allow_redirects=False).status_code
+         for i in range(14)]
+bypass["password guessing via /wp-login.php/x.css"] = f"refused from attempt {codes.index(429) + 1}" if 429 in codes else "never refused"
+import socket as _socket
+with _socket.create_connection(("127.0.0.1", 8090), timeout=10) as sock:
+    body = b"comment=%3Cscript%3Ealert(1)%3C/script%3E&author=x&email=x@x.kz&comment_post_ID=1"
+    chunked = b"%x\r\n%s\r\n0\r\n\r\n" % (len(body), body)
+    sock.sendall(b"POST /wp-comments-post.php HTTP/1.1\r\nHost: wp.localhost:8090\r\nX-Forwarded-For: 198.51.100.22\r\n"
+                 b"Content-Type: application/x-www-form-urlencoded\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                 + chunked)
+    bypass["chunked comment with <script>"] = int(sock.recv(64).split()[1])
+out["bypass_attempts"] = bypass
+
 # 6. Flood: 400 page requests in a minute from one address.
 s = client(12)
 codes = [status(s.get(GW + f"/?p=1&n={i}")) for i in range(400)]

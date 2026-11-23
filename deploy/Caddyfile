@@ -6,6 +6,13 @@
 	on_demand_tls {
 		ask http://aegis:8080/_aegis/tls-ask
 	}
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 120s
+			idle 2m
+		}
+	}
 }
 
 https:// {

@@ -17,6 +17,7 @@ Standard library only: wsgiref + http.client (see proxy.py).
 from __future__ import annotations
 
 import hmac
+import io
 import json
 import socketserver
 import threading
@@ -315,35 +316,100 @@ class _QuietServerHandler(ServerHandler):
     server_software = ""  # never announce "WSGIServer/0.2 CPython/3.x": the origin's own Server header passes
 
 
+MAX_CHUNKED = 100 * 1024 * 1024
+
+
 class _Handler(WSGIRequestHandler):
     server_version = "Aegis"
     sys_version = ""
+    timeout = 30  # seconds a client may stay silent mid-request (slow-header and stalled-body clients)
 
     def handle(self):
         """Same as wsgiref's, with a handler that does not add its own Server header."""
-        self.raw_requestline = self.rfile.readline(65537)
+        try:
+            self.raw_requestline = self.rfile.readline(65537)
+        except (TimeoutError, OSError):
+            return
         if len(self.raw_requestline) > 65536:
             self.requestline = self.request_version = self.command = ""
             self.send_error(414)
             return
         if not self.parse_request():
             return
-        handler = _QuietServerHandler(self.rfile, self.wfile, self.get_stderr(), self.get_environ(), multithread=False)
+        try:
+            environ = self.get_environ()
+        except ValueError:  # a malformed or oversized chunked body
+            self.send_error(400, "Bad chunked body")
+            return
+        except (TimeoutError, OSError):
+            return
+        stdin = environ.pop("aegis.stdin", None) or self.rfile
+        handler = _QuietServerHandler(stdin, self.wfile, self.get_stderr(), environ, multithread=False)
         handler.request_handler = self
         handler.run(self.server.get_app())
 
     def get_environ(self):
         env = super().get_environ()
         env["RAW_URI"] = self.path  # forward the request target byte-for-byte
+        if "chunked" in env.get("HTTP_TRANSFER_ENCODING", "").lower():
+            # wsgiref does not de-chunk: without this the body would be neither inspected nor forwarded.
+            body = _dechunk(self.rfile, MAX_CHUNKED)
+            env["aegis.stdin"] = io.BytesIO(body)  # ServerHandler sets wsgi.input from its stdin
+            env["CONTENT_LENGTH"] = str(len(body))
+            env.pop("HTTP_TRANSFER_ENCODING", None)
         return env
 
     def log_message(self, *args):  # the dashboard is the log
         pass
 
 
+def _dechunk(stream, limit: int) -> bytes:
+    """Read a chunked request body (RFC 9112 7.1). Raises ValueError on a malformed or oversized body."""
+    out = io.BytesIO()
+    while True:
+        line = stream.readline(1024)
+        if not line:
+            raise ValueError("chunked body ended early")
+        size_text = line.split(b";", 1)[0].strip()
+        try:
+            size = int(size_text, 16)
+        except ValueError:
+            raise ValueError("bad chunk size") from None
+        if size < 0 or out.tell() + size > limit:
+            raise ValueError("chunked body too large")
+        if size == 0:
+            while True:  # trailer fields, then the empty line
+                trailer = stream.readline(8192)
+                if trailer in (b"\r\n", b"\n", b""):
+                    return out.getvalue()
+        out.write(stream.read(size))
+        stream.readline(8)  # CRLF after the chunk
+
+
 class _ThreadingServer(socketserver.ThreadingMixIn, WSGIServer):
     daemon_threads = True
     allow_reuse_address = True
+    max_connections = 1024  # beyond this a new connection is closed at once instead of costing a thread
+
+    def __init__(self, *args, **kwargs):
+        self._slots = threading.BoundedSemaphore(self.max_connections)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
 def serve(gateway: Gateway, port: int = 8080, host: str = "127.0.0.1") -> list:

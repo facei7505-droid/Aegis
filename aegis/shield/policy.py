@@ -23,13 +23,20 @@ ALL = frozenset({"*"})
 MARKUP = frozenset({"xss"})
 STATIC = re.compile(r"\.(?:css|js|mjs|map|png|jpe?g|gif|webp|avif|svg|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|mp3|"
                     r"ogg|wav|pdf|zip|txt|xml|json)$", re.I)
+SCRIPT_IN_PATH = re.compile(r"\.(?:php\d?|phtml|asp|aspx|jsp|cgi|pl)(?:/|$)", re.I)  # /wp-login.php/x.css runs PHP
+
+
+def is_static(path: str) -> bool:
+    return bool(STATIC.search(path)) and not SCRIPT_IN_PATH.search(path)
 PASSWORD_FIELDS = {"password", "pass", "pwd", "passwd", "user_password", "login_password", "password[]",
                    "loginform[password]", "customer[password]"}
 
 
 @dataclass(frozen=True)
 class Marker:
-    """Evidence that the request comes from a signed-in editor (the CMS still checks it)."""
+    """A hint that the request comes from a signed-in editor. Anyone can send it, so it only ever
+    relaxes markup checks on admin endpoints the CMS itself refuses without a real login; it never
+    switches a virtual patch off."""
     cookie_prefix: str | None = None
     param: str | None = None          # query or form field, e.g. Bitrix `sessid`, OpenCart `user_token`
 
@@ -63,8 +70,9 @@ class Patch:
     path: re.Pattern
     methods: frozenset[str] | None = None
     param: re.Pattern | None = None    # some query/form field name must match
-    anonymous_only: tuple[Marker, ...] = ()  # allowed when one of these markers is present
     value: re.Pattern | None = None    # some body or field value must match (e.g. an XML-RPC method)
+    unless_param: re.Pattern | None = None  # ...not when a field with this name...
+    unless_value: re.Pattern | None = None  # ...has this value (filters the CMS only allows signed-in users)
 
     def matches(self, req: "Request") -> bool:
         if self.methods and req.method not in self.methods:
@@ -75,7 +83,11 @@ class Patch:
             return False
         if self.value and not any(self.value.search(t) for t in req.texts):
             return False
-        return not (self.anonymous_only and any(m.present(req) for m in self.anonymous_only))
+        if self.unless_param and any(self.unless_param.search(n) and (self.unless_value is None or
+                                                                      self.unless_value.search(v or ""))
+                                     for n, v in req.params.items()):
+            return False
+        return True
 
 
 @dataclass(frozen=True)
@@ -112,10 +124,10 @@ class Request:
             if location in ("form", "json", "body") and budget > 0:
                 texts.append(value[:budget])
                 budget -= len(value)
-        route = unquote(path)
+        route = normalize_path(path)
         rest = params.get("rest_route")
-        if rest:
-            route = f"{route.rstrip('/')}/wp-json{rest}" if route in ("", "/") else f"{route}?rest_route={rest}"
+        if rest:  # WordPress serves ?rest_route= on any front-end URL, not only on /
+            route = "/wp-json" + normalize_path(rest)
         return cls(method.upper(), path, params, cookies, route, texts)
 
     def has_password(self) -> bool:
@@ -151,6 +163,33 @@ class Preset:
         if any(lg.matches(req) for lg in self.logins):
             return True
         return self.generic_logins and req.method == "POST" and req.has_password()
+
+
+def normalize_path(path: str) -> str:
+    """The path a web server will actually serve, for matching rules against it.
+
+    Percent-decoding (up to three layers), backslashes, `;params`, repeated slashes and `.`/`..`
+    segments are all resolved, so `/health/../x`, `//bitrix//tools/vote/uf.php` and
+    `/a/%2e%2e/wp-content/uploads/x.php` are judged as the path the origin will run."""
+    out = path or "/"
+    for _ in range(3):
+        decoded = unquote(out)
+        if decoded == out:
+            break
+        out = decoded
+    out = out.replace("\\", "/").split("?", 1)[0]
+    parts: list[str] = []
+    for seg in out.split("/"):
+        seg = seg.split(";", 1)[0].rstrip(" .") if seg not in (".", "..") else seg
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(seg)
+    trailing = "/" if (out.endswith("/") and parts) else ""
+    return "/" + "/".join(parts) + trailing
 
 
 def _re(pattern: str) -> re.Pattern:
@@ -191,18 +230,21 @@ WORDPRESS = Preset(
     ],
     patches=[
         UPLOAD_PHP, SHELLS,
-        Patch("wp-user-enum", "перебор имён пользователей WordPress (?author=N)", _re(r"^/(?:index\.php)?$"),
-              frozenset({"GET", "HEAD"}), _re(r"^author$"), (WP_EDITOR,)),
-        Patch("wp-rest-users", "выгрузка списка пользователей через REST API", _re(r"/wp-json/wp/v2/users(?:/?$|\?)"),
-              frozenset({"GET", "HEAD"}), None, (WP_EDITOR,)),
+        # A cookie name proves nothing to a proxy (anyone can send one), so these are unconditional.
+        Patch("wp-user-enum", "перебор имён пользователей WordPress (?author=N)", _re(r"^/(?:index\.php/?)?$"),
+              frozenset({"GET", "HEAD"}), _re(r"^author$")),
+        # The block editor lists authors with ?who=authors or context=edit: WordPress itself refuses
+        # those filters to anyone who is not signed in, so they may pass.
+        Patch("wp-rest-users", "выгрузка пользователей через REST API", _re(r"^/wp-json/wp/v2/users(?:/\d+)?/?$"),
+              frozenset({"GET", "HEAD"}), None, unless_param=_re(r"^(?:who|capabilities(?:\[\])?)$|^context$"),
+              unless_value=_re(r"^(?:authors|edit|edit_posts)$")),
         Patch("wp-xmlrpc-multicall", "подбор паролей пачками и pingback-атаки через xmlrpc.php",
               _re(r"/xmlrpc\.php$"), frozenset({"POST"}),
               value=_re(r"<methodName>\s*(?:system\.multicall|pingback\.ping)\s*</methodName>")),
         Patch("wp-debug-log", "чтение журнала ошибок WordPress", _re(r"/wp-content/debug\.log$")),
-        Patch("wp-includes-php", "прямой запуск служебных файлов WordPress", _re(r"/wp-includes/(?!js/tinymce/).+\.php$"),
-              None, None, (WP_EDITOR,)),
+        Patch("wp-includes-php", "прямой запуск служебных файлов WordPress", _re(r"^/wp-includes/(?!js/tinymce/).+\.php$")),
     ],
-    logins=[Login(_re(r"/wp-login\.php$"), field="log"), Login(_re(r"/xmlrpc\.php$"))],
+    logins=[Login(_re(r"/wp-login\.php(?:/|$)"), field="log"), Login(_re(r"/xmlrpc\.php(?:/|$)"))],
 )
 
 # ---------------------------------------------------------------- Bitrix --
