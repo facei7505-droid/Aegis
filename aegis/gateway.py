@@ -332,14 +332,9 @@ def load_specs(path: str) -> list[AppSpec]:
         shield = "block"
         heal = "propose"
     """
-    try:
-        import tomllib
-    except ModuleNotFoundError:  # Python 3.10
-        try:
-            import tomli as tomllib
-        except ModuleNotFoundError:
-            raise SystemExit("aegis gateway reads TOML: use Python 3.11+ or `pip install tomli`") from None
-
+    from .config import tomllib
+    if tomllib is None:
+        raise SystemExit("aegis gateway reads TOML: use Python 3.11+ or `pip install tomli`")
     data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
     base = Path(path).resolve().parent
     specs = []

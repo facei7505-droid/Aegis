@@ -21,7 +21,7 @@ classifiers = [
   "Framework :: FastAPI",
   "License :: OSI Approved :: MIT License",
 ]
-dependencies = []   # the core has zero runtime dependencies
+dependencies = ['tomli>=1.1; python_version < "3.11"']   # none on 3.11+ (tomli is the stdlib tomllib)
 
 [project.optional-dependencies]
 demo = ["flask>=2.2"]

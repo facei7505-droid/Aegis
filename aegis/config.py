@@ -18,8 +18,11 @@ from pathlib import Path
 
 try:
     import tomllib
-except ModuleNotFoundError:  # Python < 3.11
-    tomllib = None
+except ModuleNotFoundError:  # Python 3.10: the same parser, installed as the `tomli` backport
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        tomllib = None
 
 from .models import Finding
 

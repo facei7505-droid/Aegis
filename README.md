@@ -6,7 +6,7 @@
 
 **Aegis blocks an attack in under a millisecond, finds the line of code the attack went through, patches it, and proves the exploit no longer works, usually in 30–50 ms.**
 
-`zero runtime dependencies` · `Flask · Django · FastAPI` · `rules first, Claude second` · `every patch gated`
+`zero runtime dependencies on 3.11+` · `Flask · Django · FastAPI` · `rules first, Claude second` · `every patch gated`
 
 </div>
 
