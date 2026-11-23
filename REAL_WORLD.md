@@ -12,7 +12,7 @@ false alarms. **The test half was never looked at while tuning.**
 | --- | --- | --- |
 | Normal, training (36,000) | 0 flagged | **0 flagged** |
 | Normal, test (36,000, held out) | 0 flagged | **0 flagged** |
-| Inspection time per request | | median 138 µs, p99 527 µs |
+| Inspection time per request | | median 226 µs, p99 868 µs |
 
 ## 2. CSIC 2010: 25,065 anomalous requests
 
@@ -59,7 +59,7 @@ Misses in these lists were studied, so these numbers are an upper bound.
 
 | List | Class | Payloads | v1.0 | Now |
 | --- | --- | --- | --- | --- |
-| Generic-SQLi.txt | sqli | 268 | 47.4% | **59.7%** |
+| Generic-SQLi.txt | sqli | 268 | 47.4% | **66.4%** |
 | quick-SQLi.txt | sqli | 77 | 70.1% | **70.1%** |
 | sqli.auth.bypass.txt | sqli | 96 | 100.0% | **100.0%** |
 | Generic-BlindSQLi.fuzzdb.txt | sqli | 42 | 97.6% | **97.6%** |
@@ -69,9 +69,9 @@ Misses in these lists were studied, so these numbers are an upper bound.
 | XSS-BruteLogic.txt | xss | 114 | 92.1% | **97.4%** |
 | XSS-Cheat-Sheet-PortSwigger.txt | xss | 6,047 | 100.0% | **100.0%** |
 | XSS-Polyglots.txt | xss | 14 | 100.0% | **100.0%** |
-| LFI-Jhaddix.txt | path_traversal | 930 | 28.4% | **80.4%** |
+| LFI-Jhaddix.txt | path_traversal | 930 | 28.4% | **84.6%** |
 | command-injection-commix.txt | command_injection | 8,262 | 100.0% | **100.0%** |
-| UnixAttacks.fuzzdb.txt | command_injection | 512 | 38.1% | **41.4%** |
+| UnixAttacks.fuzzdb.txt | command_injection | 512 | 38.1% | **42.2%** |
 
 ## 4. SecLists payload lists held out
 
@@ -82,15 +82,15 @@ Measured once before tuning, then once after. Their misses were never looked at.
 | MSSQL.fuzzdb.txt | sqli | 17 | 41.2% | **82.4%** |
 | MySQL.fuzzdb.txt | sqli | 6 | 66.7% | **66.7%** |
 | Oracle.fuzzdb.txt | sqli | 55 | 92.7% | **94.5%** |
-| XSS-OFJAAAH.txt | xss | 2,976 | 78.8% | **82.6%** |
+| XSS-OFJAAAH.txt | xss | 2,976 | 78.8% | **82.7%** |
 | XSS-Bypass-Strings-BruteLogic.txt | xss | 17 | 5.9% | **5.9%** |
 | XSS-EnDe-evation.txt | xss | 207 | 25.6% | **29.0%** |
 | XSS-payloadbox.txt | xss | 2,690 | 78.3% | **82.2%** |
 | XSS-RSNAKE.txt | xss | 74 | 66.2% | **71.6%** |
 | xss-without-parentheses-semi-colons-portswigger.txt | xss | 8 | 100.0% | **100.0%** |
 | XSS-Somdev.txt | xss | 22 | 100.0% | **100.0%** |
-| LFI-LFISuite-pathtotest.txt | path_traversal | 569 | 62.6% | **91.0%** |
-| LFI-linux-and-windows_by-1N3@CrowdShield.txt | path_traversal | 1,156 | 9.3% | **69.9%** |
+| LFI-LFISuite-pathtotest.txt | path_traversal | 569 | 62.6% | **93.8%** |
+| LFI-linux-and-windows_by-1N3@CrowdShield.txt | path_traversal | 1,156 | 9.3% | **81.1%** |
 
 ## 5. Real vulnerable applications from GitHub
 
