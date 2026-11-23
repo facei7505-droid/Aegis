@@ -25,7 +25,8 @@ dependencies = ['tomli>=1.1; python_version < "3.11"']   # none on 3.11+ (tomli 
 
 [project.optional-dependencies]
 demo = ["flask>=2.2"]
-dev = ["flask>=2.2", "pytest>=7"]
+edge = ["reportlab>=4"]   # monthly PDF reports for Aegis Edge
+dev = ["flask>=2.2", "pytest>=7", "reportlab>=4", "cryptography>=41"]
 
 [project.scripts]
 aegis = "aegis.cli:main"
@@ -37,7 +38,7 @@ Homepage = "https://github.com/facei7505-droid/aegis"
 include = ["aegis*"]
 
 [tool.setuptools.package-data]
-aegis = ["gateway_dashboard.html", "demo_app/vulnshop/*.py", "demo_app/vulnshop/*.txt", "demo_app/vulnshop/files/*", "demo_app/vulnshop/tools/*"]
+aegis = ["gateway_dashboard.html", "edge/fonts/*", "demo_app/vulnshop/*.py", "demo_app/vulnshop/*.txt", "demo_app/vulnshop/files/*", "demo_app/vulnshop/tools/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

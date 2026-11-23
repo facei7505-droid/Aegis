@@ -389,7 +389,8 @@ def block_response(verdict: Verdict, accept: str = "") -> tuple[str, bytes]:
     elif verdict.error:
         reason_ru = "Запрос не удалось проверить"
     else:
-        reason_ru = REASONS_RU.get(reason, "подозрительный запрос").capitalize()
+        reason_ru = REASONS_RU.get(reason, "подозрительный запрос")
+        reason_ru = reason_ru[:1].upper() + reason_ru[1:]
     code = inc.id if inc else reason
     import html
     page = BLOCK_PAGE.format(reason_ru=html.escape(reason_ru), reason=html.escape(reason), code=html.escape(code))

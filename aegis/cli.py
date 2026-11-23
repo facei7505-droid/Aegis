@@ -328,6 +328,9 @@ def build_parser() -> argparse.ArgumentParser:
     gw.add_argument("--ai-budget", type=float, metavar="USD", help="stop calling Claude after this much per run (default 0.25, or AEGIS_AI_BUDGET)")
     gw.set_defaults(func=cmd_gateway)
 
+    from .edge.cli import register as register_edge
+    register_edge(sub)
+
     r = sub.add_parser("rules", help="list rules")
     r.set_defaults(func=cmd_rules)
     return p

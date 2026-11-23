@@ -1,0 +1,26 @@
+# Caddy in front of Aegis Edge: HTTPS certificates for every client domain, on demand.
+# A certificate is requested only for domains Aegis knows (the `ask` check), so nobody can make
+# this server fetch certificates for random names.
+{
+	email {$ACME_EMAIL}
+	on_demand_tls {
+		ask http://aegis:8080/_aegis/tls-ask
+	}
+}
+
+https:// {
+	tls {
+		on_demand
+	}
+	encode zstd gzip
+	reverse_proxy aegis:8080 {
+		header_up X-Forwarded-Proto {scheme}
+		transport http {
+			read_timeout 75s
+		}
+	}
+}
+
+http:// {
+	redir https://{host}{uri} permanent
+}

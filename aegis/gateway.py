@@ -94,32 +94,70 @@ class Gateway:
         self.started = time.time()
         self.requests: dict[str, int] = {a.name: 0 for a in apps}
         self.recorders: dict[str, TrafficRecorder] = {}
+        self.log_dir, self.ai_fixer = log_dir, ai_fixer
+        self.on_incident: list[Callable[[AppSpec, Incident], None]] = []  # e.g. Telegram alerts, stats
+        self.tls_names: Callable[[str], bool] | None = None  # answers Caddy's on-demand TLS question
         for spec in apps:
-            callbacks = [lambda inc, s=spec: self._incident(s, inc)]
-            recorder = self.recorders[spec.name] = TrafficRecorder()
-            if spec.source and spec.heal in ("auto", "propose"):
-                # Apps the gateway can start get a canary: patches must keep real traffic working.
-                canary = Canary(spec, recorder) if spec.command and (spec.cwd or spec.source) else None
-                healer = Healer(spec.source, mode=spec.heal, ai_fixer=ai_fixer, background=True, replay=canary)
-                self.healers[spec.name] = healer
-                callbacks.append(healer)
-            log = str(Path(log_dir) / f"{spec.name}.incidents.jsonl") if log_dir else None
-            options = {k: v for k, v in spec.options.items() if k in ShieldConfig.__dataclass_fields__}
-            if options.get("learn") and log_dir and "profile_path" not in options:
-                options["profile_path"] = str(Path(log_dir) / f"{spec.name}.profile.json")
-            config = ShieldConfig(mode=spec.shield, log_path=log, **options)
-            shield = AegisShield(make_proxy(spec, recorder), config, on_incident=callbacks)
-            self.shields[spec.name] = shield
-            entry = (spec, shield)
-            for host in spec.hosts:
-                self.by_host[host.lower()] = entry
-            if spec.listen:
-                self.by_port[spec.listen] = entry
+            self._mount(spec)
         threading.Thread(target=self._watch_healers, daemon=True).start()
+
+    def _mount(self, spec: AppSpec) -> None:
+        """Build the shield (and healer) for one app and route its hosts and port to it."""
+        log_dir, ai_fixer = self.log_dir, self.ai_fixer
+        callbacks = [lambda inc, s=spec: self._incident(s, inc)]
+        recorder = self.recorders[spec.name] = TrafficRecorder()
+        if spec.source and spec.heal in ("auto", "propose"):
+            # Apps the gateway can start get a canary: patches must keep real traffic working.
+            canary = Canary(spec, recorder) if spec.command and (spec.cwd or spec.source) else None
+            healer = Healer(spec.source, mode=spec.heal, ai_fixer=ai_fixer, background=True, replay=canary)
+            self.healers[spec.name] = healer
+            callbacks.append(healer)
+        log = str(Path(log_dir) / f"{spec.name}.incidents.jsonl") if log_dir else None
+        options = {k: v for k, v in spec.options.items() if k in ShieldConfig.__dataclass_fields__}
+        if options.get("learn") and log_dir and "profile_path" not in options:
+            options["profile_path"] = str(Path(log_dir) / f"{spec.name}.profile.json")
+        config = ShieldConfig(mode=spec.shield, log_path=log, **options)
+        # Only apps that can heal need recorded traffic (the canary); other responses are streamed.
+        proxy = make_proxy(spec, recorder if spec.name in self.healers else None)
+        shield = AegisShield(proxy, config, on_incident=callbacks)
+        self.shields[spec.name] = shield
+        self.requests.setdefault(spec.name, 0)
+        entry = (spec, shield)
+        for host in spec.hosts:
+            self.by_host[host.lower()] = entry
+        if spec.listen:
+            self.by_port[spec.listen] = entry
+
+    def set_apps(self, apps: list[AppSpec]) -> dict[str, list[str]]:
+        """Apply a new list of apps without a restart. Unchanged apps keep their shield, bans and
+        counters; changed apps get a new shield; removed apps stop being routed."""
+        with self._lock:
+            old = {a.name: a for a in self.apps}
+            new = {a.name: a for a in apps}
+            added = [n for n in new if n not in old]
+            removed = [n for n in old if n not in new]
+            changed = [n for n in new if n in old and new[n] != old[n]]
+            for name in removed + changed:
+                spec = old[name]
+                for host in spec.hosts:
+                    if self.by_host.get(host.lower(), (None,))[0] is spec:
+                        del self.by_host[host.lower()]
+                if spec.listen and self.by_port.get(spec.listen, (None,))[0] is spec:
+                    del self.by_port[spec.listen]
+                self.shields.pop(name, None)
+                self.healers.pop(name, None)
+            for name in added + changed:
+                self._mount(new[name])
+            self.apps = list(apps)
+        return {"added": added, "removed": removed, "changed": changed}
 
     # -------------------------------------------------------------- WSGI --
     def __call__(self, environ, start_response):
         host = environ.get("HTTP_HOST", "").split(":")[0].lower()
+        path = environ.get("PATH_INFO", "/")
+        if path in ("/_aegis/tls-ask", "/_aegis/health") and host not in self.by_host \
+                and _private(environ.get("REMOTE_ADDR", "")):
+            return self._service(path, environ, start_response)
         try:
             port = int(environ.get("SERVER_PORT") or 0)
         except ValueError:
@@ -147,6 +185,19 @@ class Gateway:
         finally:
             _request.incident = None
 
+    def _service(self, path: str, environ, start_response):
+        """Local endpoints for the server's own tools: Caddy's on-demand TLS check and a health probe."""
+        from urllib.parse import parse_qs
+        if path == "/_aegis/health":
+            body = json.dumps({"ok": True, "sites": len(self.apps), "uptime": round(time.time() - self.started)}).encode()
+            start_response("200 OK", [("Content-Type", "application/json"), ("Content-Length", str(len(body)))])
+            return [body]
+        domain = parse_qs(environ.get("QUERY_STRING", "")).get("domain", [""])[0].lower().rstrip(".")
+        known = self.tls_names(domain) if self.tls_names else domain in self.by_host
+        status = "200 OK" if known else "404 Not Found"
+        start_response(status, [("Content-Type", "text/plain"), ("Content-Length", "0")])
+        return [b""]
+
     def _dashboard_allowed(self, environ) -> tuple[bool, str | None]:
         from http.cookies import SimpleCookie
         from urllib.parse import parse_qs
@@ -167,6 +218,11 @@ class Gateway:
     # ----------------------------------------------------------- events --
     def _incident(self, spec: AppSpec, inc: Incident) -> None:
         _request.incident = inc.id  # same thread: the proxy records the app's answer to this attack
+        for hook in self.on_incident:
+            try:
+                hook(spec, inc)
+            except Exception:  # a broken hook must never break a request
+                pass
         with self._lock:
             self.events.appendleft({
                 "id": inc.id, "time": inc.timestamp, "app": spec.name, "type": inc.attack_type,
@@ -236,6 +292,16 @@ class Gateway:
         body = DASHBOARD.encode()
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8"), ("Content-Length", str(len(body)))])
         return [body]
+
+
+def _private(address: str) -> bool:
+    """This machine or a private network (Caddy in a neighbouring Docker container)."""
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private
 
 
 # ------------------------------------------------------------------ server --
