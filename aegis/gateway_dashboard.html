@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aegis Gateway</title>
+<style>
+/* VOICE: control room. IDEA: an incident board for every app behind one gateway.
+   PICTURE: app tiles with live counters, then the incident stream with the patch inline.
+   COLOUR: night steel, alarm red for attacks, heal green. TYPE: system UI + monospace for payloads. */
+:root{color-scheme:dark;--bg:#0b1016;--panel:#121a23;--line:#223042;--ink:#e8eef5;--mute:#8a9bb0;--red:#ff5a5c;--green:#2fd18b;--amber:#f5b942;--blue:#6aa8ff}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;align-items:center;gap:14px;padding:18px max(4vw,16px);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.logo{display:flex;align-items:center;gap:9px;font-weight:700;font-size:18px}
+.live{display:flex;align-items:center;gap:7px;color:var(--mute);font-size:13px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(47,209,139,.6);animation:pulse 2s infinite}
+@keyframes pulse{70%{box-shadow:0 0 0 8px rgba(47,209,139,0)}100%{box-shadow:0 0 0 0 rgba(47,209,139,0)}}
+@media(prefers-reduced-motion:reduce){.dot{animation:none}}
+.totals{margin-left:auto;display:flex;gap:22px;flex-wrap:wrap}
+.totals b{display:block;font-size:22px;line-height:1.1;font-variant-numeric:tabular-nums}
+.totals span{color:var(--mute);font-size:12px}
+main{padding:20px max(4vw,16px) 40px;max-width:1400px;margin:0 auto}
+h2{font-size:15px;color:var(--mute);font-weight:600;margin:6px 0 12px}
+.apps{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;margin-bottom:26px}
+.app{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+.app h3{margin:0 0 2px;font-size:17px}
+.app a{color:var(--blue);text-decoration:none;font-size:13px;overflow-wrap:anywhere}
+.app .meta{color:var(--mute);font-size:12px;margin:6px 0 12px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.chip{font-size:12px;font-weight:600;padding:3px 8px;border-radius:99px;background:#1c2733;color:var(--mute);white-space:nowrap}
+.chip.block{color:var(--red);background:rgba(255,90,92,.12)}.chip.auto{color:var(--green);background:rgba(47,209,139,.12)}
+.chip.propose{color:var(--amber);background:rgba(245,185,66,.12)}
+.nums{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:left}
+.nums b{display:block;font-size:22px;font-variant-numeric:tabular-nums}.nums span{font-size:12px;color:var(--mute)}
+.nums .r b{color:var(--red)}.nums .g b{color:var(--green)}
+.feed{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.ev{display:grid;grid-template-columns:74px 92px 150px minmax(0,1fr) 150px;gap:12px;padding:12px 16px;border-top:1px solid var(--line);align-items:start}
+.ev:first-child{border-top:0}
+.ev.new{animation:flash 1.2s}
+@keyframes flash{from{background:rgba(255,90,92,.14)}to{background:transparent}}
+.t{color:var(--mute);font-variant-numeric:tabular-nums;font-size:13px}
+.type{font-weight:650}.type small{display:block;color:var(--mute);font-weight:400;font-size:12px}
+code{font:13px/1.45 ui-monospace,"DejaVu Sans Mono",Menlo,monospace;overflow-wrap:anywhere}
+.req code{color:var(--ink)}.req .p{color:var(--red)}
+.st{font-size:13px}.st .chip{display:inline-block;margin-bottom:4px}
+.st .healed{color:var(--green);background:rgba(47,209,139,.12)}.st .needs_human,.st .no_root_cause{color:var(--amber);background:rgba(245,185,66,.12)}
+.st small{display:block;color:var(--mute);font-size:12px}
+details{grid-column:2/-1}summary{cursor:pointer;color:var(--blue);font-size:13px;min-height:28px}
+pre{margin:8px 0 0;padding:10px 12px;background:#0b1016;border:1px solid var(--line);border-radius:8px;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12.5px/1.5 ui-monospace,"DejaVu Sans Mono",monospace}
+pre .d{color:#ff9c9d}pre .i{color:#7ff0bd}pre .h{color:var(--mute)}
+.empty{padding:34px 16px;color:var(--mute);text-align:center}
+@media(max-width:820px){.ev{grid-template-columns:64px minmax(0,1fr)}.ev .req,.ev .st{grid-column:2}.ev .type{grid-column:2}.totals{margin-left:0}}
+</style>
+</head>
+<body>
+<header>
+  <span class="logo"><svg width="20" height="22" viewBox="0 0 20 22" aria-hidden="true"><path d="M10 1 2 4v6c0 5 3.4 9.3 8 11 4.6-1.7 8-6 8-11V4z" fill="#2fd18b"/><path d="m6 11 3 3 5-6" stroke="#0b1016" stroke-width="2.2" fill="none"/></svg>Aegis Gateway</span>
+  <span class="live"><span class="dot"></span><span id="up">live</span></span>
+  <div class="totals">
+    <div><b id="t-req">0</b><span>requests</span></div>
+    <div><b id="t-att" style="color:var(--red)">0</b><span>attacks seen</span></div>
+    <div><b id="t-heal" style="color:var(--green)">0</b><span>holes healed</span></div>
+  </div>
+</header>
+<main>
+  <h2>Applications behind this gateway</h2>
+  <div class="apps" id="apps"></div>
+  <h2>Incidents, newest first</h2>
+  <div class="feed" id="feed"><div class="empty">No attacks yet. Try one against an app above.</div></div>
+</main>
+<script>
+{
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const seen = new Set();
+let first = true;
+const open = new Set();
+const diffHtml = d => esc(d).split("\n").map(l => `<span class="${l.startsWith("+") && !l.startsWith("+++") ? "i" : l.startsWith("-") && !l.startsWith("---") ? "d" : l.startsWith("@@") ? "h" : ""}">${l}</span>`).join("\n");
+function render(data) {
+  $("up").textContent = `live · up ${Math.floor(data.uptime / 60)} min`;
+  $("t-req").textContent = data.apps.reduce((a, x) => a + x.requests, 0);
+  $("t-att").textContent = data.apps.reduce((a, x) => a + x.blocked + x.flagged, 0);
+  $("t-heal").textContent = data.apps.reduce((a, x) => a + x.healed, 0);
+  const port = location.port ? ":" + location.port : "";
+  $("apps").innerHTML = data.apps.map(a => {
+    const url = a.hosts.length ? `http://${a.hosts[0]}${port}/` : `http://${location.hostname}:${a.listen}/`;
+    return `<div class="app"><h3>${esc(a.name)}</h3><a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>
+      <div class="meta">upstream ${esc(a.upstream)}${a.listen ? ` · also :${a.listen}` : ""}</div>
+      <div class="chips"><span class="chip ${a.shield === "block" ? "block" : ""}">shield: ${esc(a.shield)}</span><span class="chip ${esc(a.heal)}">heal: ${esc(a.heal)}</span></div>
+      <div class="nums"><div><b>${a.requests}</b><span>requests</span></div><div class="r"><b>${a.blocked + a.flagged}</b><span>attacks</span></div><div class="g"><b>${a.healed}</b><span>healed</span></div></div></div>`;
+  }).join("");
+  if (!data.events.length) return;
+  $("feed").innerHTML = data.events.map(e => {
+    const isNew = !first && !seen.has(e.id); seen.add(e.id);
+    const t = new Date(e.time * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"});
+    const verdict = e.blocked ? "blocked" : "seen (monitor)";
+    const diff = e.diff ? `<details data-id="${esc(e.id)}" ${open.has(e.id) ? "open" : ""}><summary>Show the patch</summary><pre>${diffHtml(e.diff)}</pre></details>` : "";
+    return `<div class="ev ${isNew ? "new" : ""}"><div class="t">${t}</div>
+      <div class="type">${esc(e.type.replace("_", " "))}<small>${esc(e.app)} · ${verdict}</small></div>
+      <div class="req"><code>${esc(e.method)} ${esc(e.path)}</code></div>
+      <div class="req"><code>${esc(e.param)}=<span class="p">${esc(e.payload)}</span></code></div>
+      <div class="st"><span class="chip ${esc(e.heal)}">${esc(e.heal.replace(/_/g, " "))}</span><small>${esc(e.detail)}</small></div>${diff}</div>`;
+  }).join("");
+  first = false;
+}
+document.addEventListener("toggle", ev => { const d = ev.target; if (d.dataset && d.dataset.id) d.open ? open.add(d.dataset.id) : open.delete(d.dataset.id); }, true);
+async function tick() {
+  try { render(await (await fetch("/_aegis/api/state", {cache: "no-store"})).json()); } catch (e) { $("up").textContent = "gateway unreachable"; }
+  setTimeout(tick, 1000);
+}
+tick();
+}
+</script>
+</body>
+</html>
