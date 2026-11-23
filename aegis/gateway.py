@@ -16,6 +16,7 @@ Standard library only: wsgiref + http.client.
 """
 from __future__ import annotations
 
+import hmac
 import http.client
 import json
 import socketserver
@@ -119,8 +120,11 @@ class Gateway:
     """Routes requests to apps; each app is wrapped in its own shield and healer."""
 
     def __init__(self, apps: list[AppSpec], on_healed: Callable[[AppSpec, object], None] | None = None,
-                 log_dir: str | None = None, ai_fixer=None):
+                 log_dir: str | None = None, ai_fixer=None, dashboard_token: str | None = None):
         self.apps = apps
+        # The dashboard shows attack payloads and patches of your source code. Without a token it is
+        # served to this machine only; with one, to whoever presents the token.
+        self.dashboard_token = dashboard_token
         self.by_host: dict[str, tuple[AppSpec, object]] = {}
         self.by_port: dict[int, tuple[AppSpec, object]] = {}
         self.healers: dict[str, Healer] = {}
@@ -138,8 +142,10 @@ class Gateway:
                 self.healers[spec.name] = healer
                 callbacks.append(healer)
             log = str(Path(log_dir) / f"{spec.name}.incidents.jsonl") if log_dir else None
-            config = ShieldConfig(mode=spec.shield, log_path=log, **{k: v for k, v in spec.options.items()
-                                                                     if k in ShieldConfig.__dataclass_fields__})
+            options = {k: v for k, v in spec.options.items() if k in ShieldConfig.__dataclass_fields__}
+            if options.get("learn") and log_dir and "profile_path" not in options:
+                options["profile_path"] = str(Path(log_dir) / f"{spec.name}.profile.json")
+            config = ShieldConfig(mode=spec.shield, log_path=log, **options)
             shield = AegisShield(Proxy(spec), config, on_incident=callbacks)
             self.shields[spec.name] = shield
             entry = (spec, shield)
@@ -158,6 +164,15 @@ class Gateway:
             port = 0
         entry = self.by_port.get(port) or self.by_host.get(host)
         if entry is None:
+            allowed, set_cookie = self._dashboard_allowed(environ)
+            if not allowed:
+                body = b"Aegis Gateway: unknown host"
+                start_response("404 Not Found", [("Content-Type", "text/plain"), ("Content-Length", str(len(body)))])
+                return [body]
+            if set_cookie:  # ?token=... once, then a cookie; the token leaves the address bar
+                start_response("303 See Other", [("Location", "/"), ("Content-Length", "0"), ("Set-Cookie", set_cookie),
+                                                 ("Cache-Control", "no-store")])
+                return [b""]
             if environ.get("PATH_INFO", "/").startswith("/_aegis/api"):
                 return self._api(environ, start_response)
             return self._dashboard(environ, start_response)
@@ -165,6 +180,23 @@ class Gateway:
         with self._lock:
             self.requests[spec.name] += 1
         return shield(environ, start_response)
+
+    def _dashboard_allowed(self, environ) -> tuple[bool, str | None]:
+        from http.cookies import SimpleCookie
+        from urllib.parse import parse_qs
+
+        if not self.dashboard_token:
+            return environ.get("REMOTE_ADDR", "") in ("127.0.0.1", "::1"), None
+        given = parse_qs(environ.get("QUERY_STRING", "")).get("token", [""])[0]
+        if given and hmac.compare_digest(given, self.dashboard_token):
+            return True, f"aegis_dash={self.dashboard_token}; Path=/; HttpOnly; SameSite=Strict"
+        jar = SimpleCookie()
+        try:
+            jar.load(environ.get("HTTP_COOKIE", ""))
+        except Exception:
+            return False, None
+        cookie = jar.get("aegis_dash")
+        return bool(cookie and hmac.compare_digest(cookie.value, self.dashboard_token)), None
 
     # ----------------------------------------------------------- events --
     def _incident(self, spec: AppSpec, inc: Incident) -> None:
@@ -221,6 +253,7 @@ class Gateway:
                 "flagged": shield.core.stats.get("flagged", 0),
                 "healed": sum(1 for r in self.healers[spec.name].records if r.status == "healed")
                 if spec.name in self.healers else 0,
+                "profile": shield.core.profile_state(),
             })
         return {"apps": apps, "events": events[:100], "uptime": round(time.time() - self.started)}
 

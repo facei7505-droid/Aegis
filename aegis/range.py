@@ -121,11 +121,13 @@ class Supervisor:
 
 
 def run(root: str = "aegis-range", port: int = 8080, shield: str = "monitor", heal: str = "auto",
-        fetch: bool = True, ai_fixer=None, block_forever: bool = True):
+        fetch: bool = True, ai_fixer=None, block_forever: bool = True, learn: int = 0):
     base = Path(root).resolve()
     specs = setup(base, fetch=fetch)
     for spec in specs:
         spec.shield, spec.heal = shield, heal
+        if learn:
+            spec.options["learn"] = learn
     sup = Supervisor(specs, base / "logs")
     print("\n  Aegis Range — real vulnerable apps behind one Aegis Gateway\n", flush=True)
     for spec in specs:

@@ -87,7 +87,7 @@ function render(data) {
     const url = a.hosts.length ? `http://${a.hosts[0]}${port}/` : `http://${location.hostname}:${a.listen}/`;
     return `<div class="app"><h3>${esc(a.name)}</h3><a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>
       <div class="meta">upstream ${esc(a.upstream)}${a.listen ? ` · also :${a.listen}` : ""}</div>
-      <div class="chips"><span class="chip ${a.shield === "block" ? "block" : ""}">shield: ${esc(a.shield)}</span><span class="chip ${esc(a.heal)}">heal: ${esc(a.heal)}</span></div>
+      <div class="chips"><span class="chip ${a.shield === "block" ? "block" : ""}">shield: ${esc(a.shield)}</span><span class="chip ${esc(a.heal)}">heal: ${esc(a.heal)}</span>${a.profile ? `<span class="chip ${a.profile.mode === "enforcing" ? "auto" : "propose"}">${a.profile.mode === "learning" ? `learning ${a.profile.learned}/${a.profile.target}` : `profile: ${a.profile.endpoints} endpoints`}</span>` : ""}</div>
       <div class="nums"><div><b>${a.requests}</b><span>requests</span></div><div class="r"><b>${a.blocked + a.flagged}</b><span>attacks</span></div><div class="g"><b>${a.healed}</b><span>healed</span></div></div></div>`;
   }).join("");
   if (!data.events.length) return;

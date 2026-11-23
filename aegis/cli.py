@@ -199,16 +199,22 @@ def cmd_range(args) -> int:
         print("aegis: the range needs Flask: pip install \"aegis-selfheal[demo]\"", file=sys.stderr)
         return EXIT_ERROR
     from .range import run
-    run(args.dir, args.port, args.shield, args.heal, not args.no_fetch, _optional_ai(args))
+    run(args.dir, args.port, args.shield, args.heal, not args.no_fetch, _optional_ai(args), learn=args.learn)
     return EXIT_OK
 
 
 def cmd_gateway(args) -> int:
     import time
     from .gateway import Gateway, load_specs, serve
+    import secrets
     specs = load_specs(args.config)
-    gateway = Gateway(specs, log_dir=args.log_dir, ai_fixer=_optional_ai(args))
+    token = args.dashboard_token or os.environ.get("AEGIS_DASHBOARD_TOKEN")
+    if not token and args.host not in ("127.0.0.1", "localhost", "::1"):
+        token = secrets.token_urlsafe(18)  # reachable from the network: never serve the dashboard without a token
+    gateway = Gateway(specs, log_dir=args.log_dir, ai_fixer=_optional_ai(args), dashboard_token=token)
     serve(gateway, args.port, args.host)
+    if token:
+        print(f"Dashboard: http://{args.host}:{args.port}/?token={token}", flush=True)
     print(f"Aegis Gateway on http://{args.host}:{args.port}/ protecting: " + ", ".join(
         f"{s.name} ({', '.join(s.hosts) or ':' + str(s.listen)})" for s in specs), flush=True)
     try:
@@ -289,6 +295,8 @@ def build_parser() -> argparse.ArgumentParser:
     rg.add_argument("--heal", choices=["auto", "propose", "off"], default="auto",
                     help="auto patches and restarts the app; propose writes .diff files")
     rg.add_argument("--no-fetch", action="store_true", help="do not clone DSVW and vulpy from GitHub")
+    rg.add_argument("--learn", type=int, default=0, metavar="N",
+                    help="learn N normal requests per app, then also flag anything unusual for that app")
     rg.add_argument("--ai", action="store_true", help="let Claude fix what rules cannot (needs ANTHROPIC_API_KEY)")
     rg.set_defaults(func=cmd_range)
 
@@ -297,6 +305,8 @@ def build_parser() -> argparse.ArgumentParser:
     gw.add_argument("--port", type=int, default=8080, help="main port (default 8080)")
     gw.add_argument("--host", default="127.0.0.1", help="address to listen on (default 127.0.0.1)")
     gw.add_argument("--log-dir", help="write incidents as JSON Lines here")
+    gw.add_argument("--dashboard-token", help="require this token for the dashboard (default: local machine only; "
+                                              "a random token is generated when listening on the network)")
     gw.add_argument("--ai", action="store_true", help="let Claude fix what rules cannot (needs ANTHROPIC_API_KEY)")
     gw.set_defaults(func=cmd_gateway)
 

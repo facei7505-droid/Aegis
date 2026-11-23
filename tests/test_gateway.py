@@ -155,3 +155,25 @@ def test_config_file(tmp_path):
     spec = load_specs(str(cfg))[0]
     assert spec.name == "x" and spec.listen == 8181 and spec.source == str((tmp_path / "src").resolve())
     assert spec.options == {"ban_after": 0}
+
+
+def test_dashboard_is_local_only_or_needs_a_token():
+    """The dashboard shows payloads and source diffs: never to strangers."""
+    gw = Gateway([AppSpec("a", "http://127.0.0.1:9", ["a.localhost"], heal="off")])
+    calls = []
+
+    def call(env):
+        env = {"REQUEST_METHOD": "GET", "PATH_INFO": "/", "QUERY_STRING": "", "SERVER_PORT": "8080",
+               "HTTP_HOST": "gw.example", **env}
+        body = b"".join(gw(env, lambda status, headers: calls.append((status, dict(headers)))))
+        return calls[-1][0], calls[-1][1], body
+
+    assert call({"REMOTE_ADDR": "127.0.0.1"})[0] == "200 OK"
+    assert call({"REMOTE_ADDR": "203.0.113.9"})[0] == "404 Not Found"
+    assert call({"REMOTE_ADDR": "203.0.113.9", "PATH_INFO": "/_aegis/api/state"})[0] == "404 Not Found"
+    gw.dashboard_token = "s3cret-token"
+    assert call({"REMOTE_ADDR": "127.0.0.1"})[0] == "404 Not Found"  # token set: required even locally
+    assert call({"REMOTE_ADDR": "203.0.113.9", "QUERY_STRING": "token=wrong"})[0] == "404 Not Found"
+    status, headers, _ = call({"REMOTE_ADDR": "203.0.113.9", "QUERY_STRING": "token=s3cret-token"})
+    assert status == "303 See Other" and "HttpOnly" in headers["Set-Cookie"]
+    assert call({"REMOTE_ADDR": "203.0.113.9", "HTTP_COOKIE": "aegis_dash=s3cret-token"})[0] == "200 OK"
