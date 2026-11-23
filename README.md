@@ -99,6 +99,13 @@ aegis fix . --ai --test "pytest -q"
 aegis scan . --ai-triage --lang ru      # Claude confirms each finding and explains it for a business owner
 ```
 
+**Spending is capped.** Every run stops calling Claude at `--ai-budget` (default **$0.25**). Before each request the worst case
+(whole prompt plus the maximum answer) has to fit in what is left; afterwards the real cost from the API's usage block is
+recorded. A ledger in `~/.aegis/ai-spend.json` adds up all runs, and `AEGIS_AI_TOTAL_BUDGET=3.5` stops everything at
+that total. Triage and explanations use Claude Haiku 5.5 ($0.10/$0.50 per million tokens), patches use Sonnet 5.5
+($2/$10). Each run ends with a line like `Claude: 3 request(s), 1,632 in / 1,150 out tokens, ≈$0.015`.
+`aegis demo --ai` costs about $0.02–0.04, at most about $0.12.
+
 ### Protect a running app (one line)
 
 ```python
@@ -201,7 +208,7 @@ A separate reviewer agent tried to break Aegis: 18 confirmed findings, from a sh
 ## Limitations (read before you trust it)
 
 - **Python only** for code analysis. The shield protects any WSGI/ASGI app.
-- **Taint tracking is intra-procedural.** Data that flows through helper functions in other modules can be missed. Stored XSS (attacker data saved to the DB and rendered later) is not tracked. Django and FastAPI coverage is narrower than Flask (`HttpResponse`, `HTMLResponse` and `FileResponse` are covered; class-based views and DRF are not yet).
+- **Taint follows request data into project functions** the handler calls (same file, `import mod`, `from mod import f`), up to four levels deep. Methods, dynamic dispatch and data passed through objects or globals are not followed. Stored XSS (attacker data saved to the DB and rendered later) is not tracked. Django and FastAPI coverage is narrower than Flask (`HttpResponse`, `HTMLResponse` and `FileResponse` are covered; class-based views and DRF are not yet).
 - **Argument injection.** An argument list stops shell injection, but a value starting with `-` can still be read as an option by the program (`curl`, `tar`). Aegis does not add `--` for you.
 - **Path fixes use `os.path.basename`.** Safe, but it also drops legitimate sub-folders in the user's part. Containment checks with `realpath` are on the roadmap.
 - **The shield is signature-based** with normalization. It is not a replacement for a mature WAF against a determined attacker, and its corpora are small (see BENCHMARKS.md, including the held-out misses). Signatures are the first layer; fixing the code is the point.

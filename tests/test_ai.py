@@ -211,3 +211,70 @@ def test_test_gate_runs_on_a_copy(tmp_path):
                       cwd=str(tmp_path), write=False)
     assert report.patches and report.patches[0].checks.get("tests") is True
     assert path.read_text() == PICKLE_APP and not (tmp_path / "RAN_IN").exists()
+
+
+# ------------------------------------------------------------------ spending guard --
+
+def _fake_api(monkeypatch, usage):
+    calls = []
+
+    class Resp:
+        def read(self):
+            return json.dumps({"content": [{"type": "text", "text": "ok"}], "usage": usage}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout):
+        calls.append(json.loads(req.data)["model"])
+        return Resp()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    return calls
+
+
+def test_prices_follow_the_model():
+    from aegis.ai.client import price
+    assert price("claude-sonnet-5-5", 1_000_000, 0) == 2.0 and price("claude-sonnet-5-5", 0, 1_000_000) == 10.0
+    assert round(price("claude-haiku-5-5", 50_000, 50_000), 6) == 0.03
+    assert price("claude-haiku-5-5", 200_000, 0) == 0.1  # long prompts cost more on Haiku 5.5
+    assert price("some-new-model", 1_000_000, 0) == 10.0  # unknown: priced high on purpose
+
+
+def test_budget_stops_before_overspending(monkeypatch):
+    from aegis.ai.client import BudgetExceeded, Spending
+    calls = _fake_api(monkeypatch, {"input_tokens": 2000, "output_tokens": 1000})
+    client = ClaudeClient(api_key="k", model="claude-sonnet-5-5", spending=Spending(budget=0.10))
+    done = 0
+    with pytest.raises(BudgetExceeded):
+        for _ in range(20):
+            client.complete("sys", "x" * 3000, max_tokens=2000)
+            done += 1
+    # each call really costs $0.014; the worst case (2,000 output tokens) must still fit before calling
+    assert done == len(calls) and 3 <= done <= 6
+    assert client.spending.spent <= 0.10
+
+
+def test_total_cap_across_runs_uses_the_ledger(monkeypatch, tmp_path):
+    from aegis.ai.client import BudgetExceeded, Spending
+    _fake_api(monkeypatch, {"input_tokens": 100_000, "output_tokens": 10_000})
+    ledger = str(tmp_path / "spend.json")
+    first = ClaudeClient(api_key="k", model="claude-sonnet-5-5", spending=Spending(budget=1, total_cap=0.5, ledger=ledger))
+    first.complete("s", "p", 100)
+    first.complete("s", "p", 100)
+    assert round(first.spending.total(), 3) == 0.6  # 2 x (100k in x $2 + 10k out x $10 per million)
+    second = ClaudeClient(api_key="k", model="claude-sonnet-5-5", spending=Spending(budget=1, total_cap=0.5, ledger=ledger))
+    with pytest.raises(BudgetExceeded, match="total AI cap"):
+        second.complete("s", "p", 100)
+
+
+def test_triage_uses_the_cheap_model_and_the_same_budget(monkeypatch):
+    calls = _fake_api(monkeypatch, {"input_tokens": 10, "output_tokens": 10})
+    main = ClaudeClient(api_key="k")
+    cheap = main.cheaper()
+    cheap.complete("s", "p", 10)
+    assert calls == ["claude-haiku-5-5"] and cheap.spending is main.spending and main.spending.calls == 1
+    assert "1 request" in main.spending.summary()

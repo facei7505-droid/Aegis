@@ -25,10 +25,20 @@ from .scanner.rules import RULES
 EXIT_OK, EXIT_FINDINGS, EXIT_ERROR = 0, 1, 2
 
 
-def _ai_client(required: bool):
-    from .ai import ClaudeClient
+_SPENDING = None
 
-    client = ClaudeClient()
+
+def _ai_client(required: bool, budget: float | None = None):
+    """One Claude client per run, with one spending guard; prints what was spent on exit."""
+    import atexit
+
+    from .ai.client import ClaudeClient, Spending
+
+    global _SPENDING
+    if _SPENDING is None:
+        _SPENDING = Spending(budget=budget)
+        atexit.register(lambda: _SPENDING.calls and print("  " + _SPENDING.summary(), file=sys.stderr))
+    client = ClaudeClient(spending=_SPENDING)
     if not client.available:
         if required:
             print("aegis: --ai needs the ANTHROPIC_API_KEY environment variable.", file=sys.stderr)
@@ -59,8 +69,8 @@ def cmd_scan(args) -> int:
     if args.ai_triage:
         from .ai import triage
 
-        client = _ai_client(required=True)
-        triage(findings, client, args.lang or cfg.language)
+        client = _ai_client(required=True, budget=args.ai_budget)
+        triage(findings, client.cheaper(), args.lang or cfg.language)
 
     base = root if Path(root).is_dir() else str(Path(root).parent)
     fmt = args.format
@@ -99,12 +109,14 @@ def cmd_fix(args) -> int:
     ai_fixer = None
     if args.ai:
         from .ai import AIFixer
-        ai_fixer = AIFixer(_ai_client(required=True), max_attempts=args.ai_attempts)
+        ai_fixer = AIFixer(_ai_client(required=True, budget=args.ai_budget), max_attempts=args.ai_attempts)
     only = {r.strip().upper() for r in args.only.split(",")} if args.only else None
     select = (lambda f: f.rule_id in only) if only else (lambda f: f.rule_id not in cfg.disable)
 
     exclude = cfg.exclude + ([] if (cfg.fix_tests or args.include_tests) else TEST_FILES)
     all_patches, all_escalations, diffs = [], [], []
+    from .scanner.project import analyze_project
+    analyze_project(args.path, list(iter_python_files(args.path, cfg.exclude)))  # cross-module taint
     for file in iter_python_files(args.path, exclude):
         try:
             report = fix_file(str(file), select=select, ai_fixer=ai_fixer, test_cmd=args.test,
@@ -158,7 +170,7 @@ def cmd_demo(args) -> int:
     ai_fixer = None
     if args.ai:
         from .ai import AIFixer
-        ai_fixer = AIFixer(_ai_client(required=True))
+        ai_fixer = AIFixer(_ai_client(required=True, budget=args.ai_budget))
     result = run_demo(args.workdir, ai_fixer=ai_fixer)
     Path(args.report).write_text(render_demo_report(result, args.lang), encoding="utf-8")
     s = result.summary()
@@ -180,7 +192,7 @@ def cmd_lab(args) -> int:
     ai_fixer = None
     if args.ai:
         from .ai import AIFixer
-        ai_fixer = AIFixer(_ai_client(required=True))
+        ai_fixer = AIFixer(_ai_client(required=True, budget=args.ai_budget))
     run_lab(args.workdir, args.port, args.shield, args.heal, args.fresh, ai_fixer)
     return EXIT_OK
 
@@ -189,7 +201,7 @@ def _optional_ai(args):
     if not getattr(args, "ai", False):
         return None
     from .ai import AIFixer
-    return AIFixer(_ai_client(required=True))
+    return AIFixer(_ai_client(required=True, budget=getattr(args, "ai_budget", None)))
 
 
 def cmd_range(args) -> int:
@@ -248,6 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--exclude", action="append", help="glob, can repeat")
     s.add_argument("--disable", action="append", help="rule id, can repeat")
     s.add_argument("--ai-triage", action="store_true", help="ask Claude to confirm findings and explain them")
+    s.add_argument("--ai-budget", type=float, metavar="USD", help="stop calling Claude after this much per run (default 0.25, or AEGIS_AI_BUDGET)")
     s.add_argument("--lang", choices=["en", "ru", "kk"], help="language of AI explanations")
     s.set_defaults(func=cmd_scan)
 
@@ -255,6 +268,7 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("path", nargs="?", default=".", help="file or folder (default: current folder)")
     f.add_argument("--dry-run", action="store_true", help="show patches, change nothing")
     f.add_argument("--ai", action="store_true", help="use Claude for issues rules cannot fix")
+    f.add_argument("--ai-budget", type=float, metavar="USD", help="stop calling Claude after this much per run (default 0.25, or AEGIS_AI_BUDGET)")
     f.add_argument("--ai-attempts", type=int, default=3, help="tries per issue when Claude fixes it (default 3)")
     f.add_argument("--test", help='command that must pass after each patch, e.g. "pytest -q"')
     f.add_argument("--only", help="comma separated rule ids")
@@ -271,6 +285,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("demo", help="run the self-healing demo")
     d.add_argument("--ai", action="store_true", help="let Claude fix what rules cannot (needs ANTHROPIC_API_KEY)")
+    d.add_argument("--ai-budget", type=float, metavar="USD", help="stop calling Claude after this much per run (default 0.25, or AEGIS_AI_BUDGET)")
     d.add_argument("--report", default="aegis-demo-report.html", help="HTML report path")
     d.add_argument("--workdir", help="where to copy VulnShop (default: a temp folder)")
     d.add_argument("--lang", choices=["en", "ru"], default="en", help="language of the HTML report")
@@ -285,6 +300,7 @@ def build_parser() -> argparse.ArgumentParser:
     lab.add_argument("--workdir", default="aegis-lab", help="folder with the lab copy of VulnShop")
     lab.add_argument("--fresh", action="store_true", help="start again from the vulnerable version")
     lab.add_argument("--ai", action="store_true", help="let Claude fix what rules cannot (needs ANTHROPIC_API_KEY)")
+    lab.add_argument("--ai-budget", type=float, metavar="USD", help="stop calling Claude after this much per run (default 0.25, or AEGIS_AI_BUDGET)")
     lab.set_defaults(func=cmd_lab)
 
     rg = sub.add_parser("range", help="real vulnerable apps behind one Aegis Gateway (local lab)")
@@ -298,6 +314,7 @@ def build_parser() -> argparse.ArgumentParser:
     rg.add_argument("--learn", type=int, default=0, metavar="N",
                     help="learn N normal requests per app, then also flag anything unusual for that app")
     rg.add_argument("--ai", action="store_true", help="let Claude fix what rules cannot (needs ANTHROPIC_API_KEY)")
+    rg.add_argument("--ai-budget", type=float, metavar="USD", help="stop calling Claude after this much per run (default 0.25, or AEGIS_AI_BUDGET)")
     rg.set_defaults(func=cmd_range)
 
     gw = sub.add_parser("gateway", help="protect any HTTP apps from one server")
@@ -308,6 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
     gw.add_argument("--dashboard-token", help="require this token for the dashboard (default: local machine only; "
                                               "a random token is generated when listening on the network)")
     gw.add_argument("--ai", action="store_true", help="let Claude fix what rules cannot (needs ANTHROPIC_API_KEY)")
+    gw.add_argument("--ai-budget", type=float, metavar="USD", help="stop calling Claude after this much per run (default 0.25, or AEGIS_AI_BUDGET)")
     gw.set_defaults(func=cmd_gateway)
 
     r = sub.add_parser("rules", help="list rules")
