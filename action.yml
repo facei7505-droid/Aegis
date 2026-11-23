@@ -1,0 +1,41 @@
+name: "Aegis self-healing security scan"
+description: "Find vulnerabilities in Python web apps, show them in GitHub Code Scanning and (optionally) propose verified patches."
+branding:
+  icon: shield
+  color: green
+inputs:
+  path:
+    description: "Folder to scan"
+    default: "."
+  fail-on:
+    description: "critical | high | medium | low | never"
+    default: "high"
+  upload-sarif:
+    description: "Upload results to GitHub Code Scanning"
+    default: "true"
+  propose-fixes:
+    description: "Write verified patches to aegis-fixes.diff and add them to the job summary"
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: pip install "${{ github.action_path }}"
+    - shell: bash
+      run: aegis scan "${{ inputs.path }}" --format sarif --output aegis.sarif --fail-on never
+    - if: inputs.upload-sarif == 'true'
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: aegis.sarif
+        category: aegis
+    - if: inputs.propose-fixes == 'true'
+      shell: bash
+      run: |
+        aegis fix "${{ inputs.path }}" --dry-run --diff aegis-fixes.diff || true
+        aegis scan "${{ inputs.path }}" --format markdown --fail-on never >> "$GITHUB_STEP_SUMMARY"
+        if [ -s aegis-fixes.diff ]; then
+          { echo; echo "<details><summary>Verified patches proposed by Aegis</summary>"; echo; echo '```diff';
+            cat aegis-fixes.diff; echo '```'; echo "</details>"; } >> "$GITHUB_STEP_SUMMARY"
+        fi
+    - shell: bash
+      run: aegis scan "${{ inputs.path }}" --fail-on "${{ inputs.fail-on }}"

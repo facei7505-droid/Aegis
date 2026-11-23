@@ -1,0 +1,7 @@
+- id: aegis
+  name: aegis security scan
+  description: Block commits that add high/critical vulnerabilities.
+  entry: aegis scan --fail-on high
+  language: python
+  types: [python]
+  pass_filenames: false
