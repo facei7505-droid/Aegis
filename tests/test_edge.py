@@ -323,7 +323,9 @@ def test_cli_round_trip(tmp_path, shop, capsys):
     assert main(home + ["add", "www.shop.kz", "--origin", shop]) == 2
     assert main(home + ["origin-test", "shop.kz"]) == 0
     assert "Можно переключать DNS" in capsys.readouterr().out
+    assert Registry(tmp_path / "sites.json").get("shop.kz").learning()
     assert main(home + ["pause", "shop.kz"]) == 0 and main(home + ["resume", "shop.kz"]) == 0
+    assert Registry(tmp_path / "sites.json").get("shop.kz").effective_mode() == "block"   # resume = block now
     assert main(home + ["list"]) == 0 and "ИП Ромашка" in capsys.readouterr().out
     assert main(home + ["caddyfile", "--email", "me@x.kz"]) == 0 and "on_demand" in capsys.readouterr().out
     if pytest.importorskip("reportlab"):

@@ -34,7 +34,7 @@ HELP = """<b>{brand}</b>
 /status — что с сайтами сейчас
 /report <i>сайт</i> [ГГГГ-ММ] — отчёт за месяц (PDF)
 /pause <i>сайт</i> — выключить блокировки (атаки продолжат записываться)
-/resume <i>сайт</i> — включить блокировки обратно
+/resume <i>сайт</i> — включить блокировки сейчас (и закончить обучение)
 /unban <i>IP</i> [сайт] — снять блокировку с адреса
 /id — номер этого чата"""
 
@@ -189,7 +189,8 @@ class Bot:
             if site is None:
                 return "Укажите сайт: " + cmd + " shop.kz"
             mode = "monitor" if cmd == "/pause" else "block"
-            updated = self.edge.registry.update(site.domain, mode=mode)
+            changes = {"mode": mode} if mode == "monitor" else {"mode": mode, "learn_until": ""}
+            updated = self.edge.registry.update(site.domain, **changes)
             self.edge.reload(force=True)
             if mode == "monitor":
                 return (f"<b>{esc(site.domain)}</b>: блокировки выключены. Атаки продолжают записываться.\n"

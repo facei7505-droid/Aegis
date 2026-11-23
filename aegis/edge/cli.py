@@ -76,7 +76,7 @@ def register(sub) -> None:
 
     cmds.add_parser("list", help="list protected sites")
     for name, text in (("remove", "stop protecting a site"), ("pause", "stop blocking (keep recording)"),
-                       ("resume", "block attacks again"), ("origin-test", "check the origin before DNS moves")):
+                       ("resume", "block attacks now (also ends the learning period)"), ("origin-test", "check the origin before DNS moves")):
         c = cmds.add_parser(name, help=text)
         c.add_argument("domain")
     s = cmds.add_parser("serve", help="run the edge server")
@@ -157,7 +157,8 @@ def run(args) -> int:
                 site = registry.remove(args.domain)
                 print(f"{site.domain}: больше не защищается. Верните DNS клиента на {site.origin}.")
             else:
-                site = registry.update(args.domain, mode="monitor" if cmd == "pause" else "block")
+                changes = {"mode": "monitor"} if cmd == "pause" else {"mode": "block", "learn_until": ""}
+                site = registry.update(args.domain, **changes)  # resume = block now, learning or not
                 print(f"{site.domain}: {site.status_ru()}")
         except (KeyError, ValueError) as exc:
             print(f"aegis edge: {exc.args[0] if exc.args else exc}", file=sys.stderr)

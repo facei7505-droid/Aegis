@@ -12,6 +12,38 @@
 
 ---
 
+## Aegis Edge: protection for client sites (the product)
+
+One server protects many websites. The site owner changes one DNS record; Caddy issues the HTTPS
+certificate; Aegis applies the site's CMS preset (WordPress, 1C-Bitrix, OpenCart or generic) and
+forwards clean requests to the site's own server. Nothing in the site's code or hosting changes.
+Built for small businesses in Kazakhstan: Russian alerts and commands in Telegram, a monthly PDF
+report for the client, a 7-day learning period before anything is blocked.
+
+| Measured on a real WordPress behind Aegis, driven in Chrome ([data](benchmarks/data/wordpress_lab.json)) | |
+| --- | --- |
+| Ordinary owner and visitor work (posts with a Kaspi button and map, Yandex.Metrika counter, uploads, comments, settings): wrongful blocks | **0 of 2,247 requests** |
+| Same session, signatures without the WordPress preset | 3 would have been blocked (why presets exist) |
+| XSS / command injection / path traversal / SQLi strings from SecLists, sent to search and comments | **100% / 100% / 84% / 67%** (SQLi misses are mostly single words like `update`) |
+| Password guessing on wp-login.php | refused after 10 attempts, the rest of the site stays open |
+| xmlrpc multicall, user enumeration, PHP in uploads, debug.log, backups, WPScan | all refused (virtual patches) |
+| Added latency, WordPress page / static file (median) | **+2.5 ms / +0.8 ms** |
+| Throughput on 2 vCPU, origin included | **~750 requests/s**, 0 errors |
+
+```bash
+aegis check shop.kz --pdf shop.pdf                 # passive check to show a prospective client
+aegis edge add shop.kz --origin 198.51.100.7 --cms wordpress --client "ИП Ромашка"
+aegis edge origin-test shop.kz                     # before the client moves DNS
+aegis edge serve                                   # behind Caddy: deploy/docker-compose.yml
+```
+
+Start here: [deploy/README.ru.md](deploy/README.ru.md) (from an empty server to the first client),
+[docs/SALES.ru.md](docs/SALES.ru.md) (offer, prices, objections, first messages),
+[docs/shield/index.html](docs/shield/index.html) (landing page for clients). Reproduce the lab:
+`benchmarks/wordpress/` (`setup.sh`, then `lab.sh` with `session.py` and `attack.py`).
+
+## Self-healing for Python developers (open source)
+
 Most security tools stop at a warning. A scanner gives you a PDF with 200 findings. A firewall blocks the request and the hole stays open. AI code assistants suggest a fix, and you have to trust it.
 
 Aegis closes the loop:
@@ -218,6 +250,7 @@ A separate reviewer agent tried to break Aegis: 18 confirmed findings, from a sh
 - **Parameter pollution** is covered for repeated names (joined with `,` and concatenated). A payload split across *different* parameter names that the app glues together is not reassembled.
 - **Self-healing on a live server** patches the source file. Your process still needs a reload, or a deploy for `propose` mode, before the fix is live. Until then the shield keeps blocking.
 - The range runs third-party apps (DSVW, vulpy) and real tools (sqlmap, commix), but on one machine with one attacker. The next milestone is pilots on real, maintained codebases.
+- **Aegis Edge** cannot stop traffic that goes to the site's origin directly: close the origin to everything but the Aegis server where the hosting allows it. WebSocket is not proxied (answered 501). The WordPress preset is measured on a real WordPress; the Bitrix and OpenCart presets are built from documentation and published attack write-ups and have not met a production site yet, which is what the learning week is for. One edge server is one point of failure: keep DNS TTL at 300 for a fast rollback.
 
 ## Roadmap
 
