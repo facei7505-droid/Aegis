@@ -186,7 +186,7 @@ flowchart LR
 
 ## CI/CD
 
-- **GitHub Action**: `uses: facei7505-droid/aegis@v1`. Results appear in GitHub Code Scanning (SARIF 2.1.0), and verified patches go to the job summary.
+- **GitHub Action**: `uses: facei7505-droid/Aegis@v1.2.0`. Results appear in GitHub Code Scanning (SARIF 2.1.0), and verified patches go to the job summary.
 - **pre-commit**: hook id `aegis`.
 - **Exit codes**: `aegis scan --fail-on high` returns 1 when something at that level is found.
 - **Baseline** for legacy code: `aegis baseline` once, after that CI fails only on *new* problems.
