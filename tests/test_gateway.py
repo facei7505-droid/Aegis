@@ -137,7 +137,7 @@ def test_gateway_heals_the_app_behind_it(tmp_path):
         while not healed and time.time() < end:
             time.sleep(0.1)
         assert healed == ["search"]
-        assert "WHERE name LIKE ?" in (shop / "app.py").read_text()
+        assert "WHERE name LIKE ?" in (shop / "app.py").read_text(encoding="utf-8")
         events = gw.snapshot()["events"]
         assert events[0]["heal"] == "healed" and "search() patched" in events[0]["detail"] and events[0]["diff"]
     finally:

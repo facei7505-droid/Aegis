@@ -1,4 +1,6 @@
 """Request data followed from handlers into helpers in other modules."""
+from pathlib import Path
+
 from aegis.scanner import scan_path
 from aegis.patcher import fix_file
 from aegis.scanner.project import analyze_project
@@ -10,7 +12,7 @@ HELPER = ("import sqlite3\n\n\ndef login(username, password):\n    c = sqlite3.c
 
 
 def sqli(findings):
-    return [(f.file.split("/")[-1], f.function, f.severity) for f in findings if f.rule_id == "AEG001"]
+    return [(Path(f.file).name, f.function, f.severity) for f in findings if f.rule_id == "AEG001"]
 
 
 def test_module_import_makes_helper_sink_critical(tmp_path):

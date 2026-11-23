@@ -59,7 +59,7 @@ def test_ai_patch_is_verified_and_applied(tmp_path):
     path.write_text(PICKLE_APP)
     model = ScriptedModel("```json\n" + _reply(GOOD_FIX, ["import json"], "Use JSON instead of pickle.") + "\n```")
     report = fix_file(str(path), ai_fixer=AIFixer(model))
-    out = path.read_text()
+    out = path.read_text(encoding="utf-8")
     assert report.patches and report.patches[0].engine == "ai" and report.patches[0].verified
     assert "pickle.loads" not in out and "json.loads" in out and "import json" in out
     assert not [f for f in scan_source(str(path)) if f.rule_id == "AEG004"]
@@ -83,7 +83,7 @@ def test_ai_cannot_sneak_in_unverified_code(tmp_path):
     broken = GOOD_FIX.replace("return f", "return (")
     model = ScriptedModel(_reply(broken), _reply(broken), _reply(broken))
     report = fix_file(str(path), ai_fixer=AIFixer(model, max_attempts=3))
-    assert not report.patches and path.read_text() == PICKLE_APP
+    assert not report.patches and path.read_text(encoding="utf-8") == PICKLE_APP
     assert "not valid Python" in report.escalated[0].reason or "verification" in report.escalated[0].reason
 
 
@@ -168,7 +168,7 @@ def test_ai_must_keep_route_decorator(tmp_path):
     model = ScriptedModel(_reply(no_decorator, ["import json"]), _reply(GOOD_FIX, ["import json"]))
     report = fix_file(str(path), ai_fixer=AIFixer(model))
     assert report.patches and "decorators" in model.prompts[1]
-    assert '@app.route("/cart")' in path.read_text()
+    assert '@app.route("/cart")' in path.read_text(encoding="utf-8")
 
 
 def test_ai_code_block_fallback(tmp_path):
@@ -194,7 +194,7 @@ def test_ai_guardrails_reject_extra_power(tmp_path, code, imports, why):
     model = ScriptedModel(*[_reply(code, imports)] * 3)
     ai = AIFixer(model, max_attempts=3)
     report = fix_file(str(path), ai_fixer=ai)
-    assert path.read_text() == PICKLE_APP and not report.patches
+    assert path.read_text(encoding="utf-8") == PICKLE_APP and not report.patches
     assert why in report.escalated[0].reason
 
 
@@ -203,14 +203,14 @@ def test_test_gate_runs_on_a_copy(tmp_path):
     path = tmp_path / "app.py"
     path.write_text(PICKLE_APP)
     probe = tmp_path / "test_probe.py"
-    probe.write_text("import pathlib\n\ndef test_probe():\n    assert 'json.loads' in pathlib.Path('app.py').read_text()\n"
+    probe.write_text("import pathlib\n\ndef test_probe():\n    assert 'json.loads' in pathlib.Path('app.py').read_text(encoding="utf-8")\n"
                      "    pathlib.Path(__file__).with_name('RAN_IN').write_text(str(pathlib.Path.cwd()))\n")
     model = ScriptedModel(_reply(GOOD_FIX, ["import json"]))
     import sys
     report = fix_file(str(path), ai_fixer=AIFixer(model), test_cmd=f"{sys.executable} -m pytest -q -p no:cacheprovider",
                       cwd=str(tmp_path), write=False)
     assert report.patches and report.patches[0].checks.get("tests") is True
-    assert path.read_text() == PICKLE_APP and not (tmp_path / "RAN_IN").exists()
+    assert path.read_text(encoding="utf-8") == PICKLE_APP and not (tmp_path / "RAN_IN").exists()
 
 
 # ------------------------------------------------------------------ spending guard --

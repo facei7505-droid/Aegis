@@ -211,7 +211,7 @@ def test_dry_run_does_not_write(tmp_path):
     original = "API_KEY = 'sk_live_abcdef123456'\n"
     path.write_text(original)
     report = fix_file(str(path), write=False)
-    assert report.changed and path.read_text() == original
+    assert report.changed and path.read_text(encoding="utf-8") == original
 
 
 def test_test_gate_rejects_breaking_patch(tmp_path):
@@ -233,7 +233,7 @@ def test_full_demo_app_patched_code_is_clean(tmp_path):
     remaining = {f.rule_id for f in scan_source(str(tmp_path / "shop" / "app.py"))}
     assert remaining == {"AEG004", "AEG010"}   # pickle + MD5 need a human (or Claude)
     assert all(p.verified for p in report.patches) and len(report.patches) == 10
-    compile((tmp_path / "shop" / "app.py").read_text(), "app.py", "exec")
+    compile((tmp_path / "shop" / "app.py").read_text(encoding="utf-8"), "app.py", "exec")
 
 
 def test_fix_refused_when_module_name_is_shadowed(tmp_path):

@@ -68,7 +68,7 @@ def test_canary_rejects_a_patch_that_breaks_pages_and_accepts_a_good_one(tmp_pat
         assert bad and "200 → 500" in notes
         bad, notes = canary.check_patch(inc, str(tmp_path / "srv" / "server.py"), app())
         assert not bad and "2 real request(s) replayed, all as before" in notes
-        assert (tmp_path / "srv" / "server.py").read_text() == app()  # the live file is never touched
+        assert (tmp_path / "srv" / "server.py").read_text(encoding="utf-8") == app()  # the live file is never touched
     finally:
         proc.terminate()
 

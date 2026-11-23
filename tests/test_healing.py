@@ -32,12 +32,12 @@ def test_route_patterns():
 
 def test_propose_mode_writes_diff_and_leaves_code(shop):
     healer = Healer(str(shop), mode="propose")
-    before = (shop / "app.py").read_text()
+    before = (shop / "app.py").read_text(encoding="utf-8")
     rec = healer.heal(incident("/search", "q", "' OR 1=1 --", "sqli"))
     assert rec.status == "healed" and rec.function == "search" and rec.route == "/search"
-    assert (shop / "app.py").read_text() == before
+    assert (shop / "app.py").read_text(encoding="utf-8") == before
     diffs = list((shop / ".aegis" / "patches").glob("*.diff"))
-    assert diffs and "LIKE ?" in diffs[0].read_text()
+    assert diffs and "LIKE ?" in diffs[0].read_text(encoding="utf-8")
 
 
 def test_auto_mode_patches_only_the_attacked_function(shop):
@@ -57,9 +57,9 @@ def test_second_attack_on_healed_code(shop):
 
 def test_replay_rejects_patch_if_exploit_still_works(shop):
     healer = Healer(str(shop), mode="auto", replay=lambda inc, file: True)
-    before = (shop / "app.py").read_text()
+    before = (shop / "app.py").read_text(encoding="utf-8")
     rec = healer.heal(incident("/ping", "host", "1 & echo X", "command_injection"))
-    assert rec.status == "needs_human" and (shop / "app.py").read_text() == before
+    assert rec.status == "needs_human" and (shop / "app.py").read_text(encoding="utf-8") == before
     assert "replayed attack still worked" in rec.escalations[0].reason
 
 
@@ -139,7 +139,7 @@ def test_blueprint_prefix_maps_to_the_right_handler(tmp_path):
     healer = Healer(str(tmp_path), mode="auto")
     rec = healer.heal(incident("/api/search", "q", "' OR 1=1--", "sqli"))
     assert rec.status == "healed" and rec.function == "search"
-    out = (tmp_path / "api.py").read_text()
+    out = (tmp_path / "api.py").read_text(encoding="utf-8")
     assert "WHERE name = ?" in out and "WHERE title = '{q}'" in out  # report() untouched
 
 
@@ -147,7 +147,7 @@ def test_ambiguous_request_is_never_guessed(tmp_path):
     (tmp_path / "api.py").write_text(BLUEPRINT_APP.replace('"/report"', '"/v2/search"'))
     healer = Healer(str(tmp_path), mode="auto")
     rec = healer.heal(incident("/api/v2/x", "q", "' OR 1=1--", "sqli"))
-    assert rec.status == "no_root_cause" and "{q}" in (tmp_path / "api.py").read_text()
+    assert rec.status == "no_root_cause" and "{q}" in (tmp_path / "api.py").read_text(encoding="utf-8")
 
 
 def test_replay_check_only_recorded_when_a_replay_ran(shop):
@@ -206,7 +206,7 @@ def test_registered_blueprint_prefix_and_helper_sink(tmp_path):
                                          "    return c.execute(\"SELECT * FROM users WHERE u = '{}' AND p = '{}'\".format(username, password))\n")
     rec = Healer(str(tmp_path), mode="auto").heal(incident("/user/login", "u", "admin' --", "sqli", "POST"))
     assert rec.status == "healed" and rec.function == "login" and rec.route == "/user/login"
-    assert "WHERE u = ? AND p = ?" in (tmp_path / "libuser.py").read_text()
+    assert "WHERE u = ? AND p = ?" in (tmp_path / "libuser.py").read_text(encoding="utf-8")
 
 
 def test_plain_http_server_handler(tmp_path):
@@ -218,4 +218,4 @@ def test_plain_http_server_handler(tmp_path):
         "        cur.execute(\"SELECT * FROM users WHERE id=\" + params['id'])\n")
     rec = Healer(str(tmp_path), mode="auto").heal(incident("/", "id", "1 OR 1=1", "sqli"))
     assert rec.status == "healed" and rec.function == "do_GET"
-    assert 'WHERE id=?", (params["id"],))' in (tmp_path / "srv.py").read_text()
+    assert 'WHERE id=?", (params["id"],))' in (tmp_path / "srv.py").read_text(encoding="utf-8")

@@ -88,7 +88,7 @@ def test_monitor_mode_logs_but_does_not_block(tmp_path):
     c, shield = client(mode="monitor", log_path=str(log))
     r = c.get("/search", query_string={"q": "<script>alert(1)</script>"})
     assert r.status_code == 200 and shield.incidents and not shield.incidents[0].blocked
-    assert json.loads(log.read_text().splitlines()[0])["attack_type"] == "xss"
+    assert json.loads(log.read_text(encoding="utf-8").splitlines()[0])["attack_type"] == "xss"
 
 
 def test_form_body_is_inspected_and_still_readable():

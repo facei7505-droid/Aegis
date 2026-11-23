@@ -26,10 +26,10 @@ def test_scan_exit_codes(tmp_path, capsys):
 def test_scan_json_and_sarif(tmp_path):
     p = project(tmp_path)
     main(["scan", str(p), "-f", "json", "-o", str(tmp_path / "r.json")])
-    data = json.loads((tmp_path / "r.json").read_text())
+    data = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
     assert len(data["findings"]) == 13 and data["findings"][0]["file"] == "app.py"
     main(["scan", str(p), "-f", "sarif", "-o", str(tmp_path / "r.sarif")])
-    sarif = json.loads((tmp_path / "r.sarif").read_text())
+    sarif = json.loads((tmp_path / "r.sarif").read_text(encoding="utf-8"))
     run = sarif["runs"][0]
     assert sarif["version"] == "2.1.0" and len(run["results"]) == 13
     assert {r["id"] for r in run["tool"]["driver"]["rules"]} >= {r["ruleId"] for r in run["results"]}
@@ -39,10 +39,10 @@ def test_scan_json_and_sarif(tmp_path):
 def test_html_and_markdown(tmp_path):
     p = project(tmp_path)
     main(["scan", str(p), "-f", "html", "-o", str(tmp_path / "r.html"), "--lang", "ru"])
-    html = (tmp_path / "r.html").read_text()
+    html = (tmp_path / "r.html").read_text(encoding="utf-8")
     assert "<!DOCTYPE html>" in html and "Отчёт по безопасности" in html and "<script" not in html.split("<style>")[0]
     main(["scan", str(p), "-f", "markdown", "-o", str(tmp_path / "r.md")])
-    assert "| Severity |" in (tmp_path / "r.md").read_text()
+    assert "| Severity |" in (tmp_path / "r.md").read_text(encoding="utf-8")
 
 
 def test_report_escapes_attacker_content(tmp_path):
@@ -50,7 +50,7 @@ def test_report_escapes_attacker_content(tmp_path):
     p.mkdir()
     (p / "app.py").write_text("API_KEY = '<img src=x onerror=alert(1)>abcdef'\n")
     main(["scan", str(p), "-f", "html", "-o", str(tmp_path / "r.html")])
-    assert "<img src=x" not in (tmp_path / "r.html").read_text()
+    assert "<img src=x" not in (tmp_path / "r.html").read_text(encoding="utf-8")
 
 
 def test_baseline_hides_known_findings(tmp_path, capsys):
@@ -59,7 +59,7 @@ def test_baseline_hides_known_findings(tmp_path, capsys):
     main(["baseline", str(p), "-o", str(base)])
     assert main(["scan", str(p), "--baseline", str(base)]) == 0
     app = p / "app.py"
-    app.write_text(app.read_text() + "\nTOKEN = 'ghp_newly_leaked_token_123'\n")
+    app.write_text(app.read_text(encoding="utf-8") + "\nTOKEN = 'ghp_newly_leaked_token_123'\n")
     assert main(["scan", str(p), "--baseline", str(base)]) == 1
     out = capsys.readouterr().out
     assert "ghp_newly_leaked_token_123" in out and "13 known finding(s) hidden" in out
@@ -69,20 +69,20 @@ def test_config_from_pyproject(tmp_path):
     p = project(tmp_path)
     (p / "pyproject.toml").write_text('[tool.aegis]\ndisable = ["AEG010", "AEG006"]\nfail_on = "critical"\n')
     main(["scan", str(p), "-f", "json", "-o", str(tmp_path / "r.json")])
-    ids = {f["rule_id"] for f in json.loads((tmp_path / "r.json").read_text())["findings"]}
+    ids = {f["rule_id"] for f in json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))["findings"]}
     assert "AEG010" not in ids and "AEG006" not in ids
 
 
 def test_fix_dry_run_and_apply(tmp_path, capsys):
     p = project(tmp_path)
-    before = (p / "app.py").read_text()
+    before = (p / "app.py").read_text(encoding="utf-8")
     main(["fix", str(p), "--dry-run"])
-    assert (p / "app.py").read_text() == before
+    assert (p / "app.py").read_text(encoding="utf-8") == before
     assert "10 verified patch(es) proposed" in capsys.readouterr().out
     main(["fix", str(p), "--diff", str(tmp_path / "all.diff"), "--report", str(tmp_path / "fix.html")])
-    assert (p / "app.py").read_text() != before
-    assert "+++ b/app.py" in (tmp_path / "all.diff").read_text()
-    assert "Verified patches" in (tmp_path / "fix.html").read_text()
+    assert (p / "app.py").read_text(encoding="utf-8") != before
+    assert "+++ b/app.py" in (tmp_path / "all.diff").read_text(encoding="utf-8")
+    assert "Verified patches" in (tmp_path / "fix.html").read_text(encoding="utf-8")
 
 
 def test_ai_flag_requires_key(tmp_path, monkeypatch, capsys):
