@@ -273,7 +273,22 @@ class Healer:
 
             t2 = time.perf_counter()
             status = "needs_human"
-            if report.patches and report.changed:
+            notes = ""
+            if report.patches and report.changed and getattr(self.replay, "check_patch", None):
+                # Canary: the patched code runs in a copy and must behave like the live app on real traffic.
+                bad, notes = self.replay.check_patch(incident, file, report.patched)
+                for p in report.patches:
+                    p.checks["canary"] = not bad
+                if bad:
+                    report.escalated.extend(Escalation(p.finding, f"Canary rejected the patch: {notes}")
+                                            for p in report.patches)
+                    report.patches = []
+                else:
+                    status = "healed"
+                    self._apply(file, report, incident)
+                    for p in report.patches:
+                        self._healed.add((file, function, p.finding.rule_id))
+            elif report.patches and report.changed:
                 exploitable = False
                 if self.replay is not None:
                     original = Path(file).read_text(encoding="utf-8")
@@ -300,7 +315,7 @@ class Healer:
             self._escalated[key] = time.time()
         rec = HealingRecord(incident, route, function, findings, report.patches, status,
                             locate_ms=locate_ms, patch_ms=patch_ms, verify_ms=verify_ms,
-                            escalations=report.escalated)
+                            escalations=report.escalated, notes=notes)
         return self._store(rec)
 
     def _apply(self, file: str, report, incident: Incident) -> None:

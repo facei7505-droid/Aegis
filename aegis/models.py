@@ -103,6 +103,7 @@ class HealingRecord:
     patch_ms: float = 0.0
     verify_ms: float = 0.0
     escalations: list[Escalation] = field(default_factory=list)
+    notes: str = ""  # e.g. what the canary replay found
 
     @property
     def total_ms(self) -> float:

@@ -29,7 +29,7 @@ A patch is accepted only if it passes **all** of these gates:
 2. **fixed**: the vulnerability is gone from that function
 3. **no new**: no other vulnerability appeared anywhere in the file
 4. **tests**: your own test suite still passes (optional, `--test "pytest -q"`)
-5. **replay**: the attack that triggered the healing is replayed against the patched code and has to fail (when a replay function is configured: `aegis demo`, `aegis lab`, or `Healer(replay=...)`)
+5. **replay / canary**: the patched code runs in a copy of the app; recent real requests are replayed against the copy and the live app and must answer the same, and the attack is replayed against the copy (never the live app). In the demo the exploit must fail; behind the gateway any app it can start gets this canary.
 
 Gates 1–3 are static: they re-scan the code with the same scanner. They prove the pattern is gone, not that the app still behaves the same. That is what gates 4 and 5, the property tests below, and `propose` mode (a human merges the diff) are for.
 

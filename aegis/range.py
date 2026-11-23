@@ -67,14 +67,14 @@ def setup(root: Path, fetch: bool = True) -> list[AppSpec]:
         subprocess.run(["git", "-C", str(target), "checkout", "-q", commit], check=True)
     py = sys.executable
     specs = [AppSpec("shop", "http://127.0.0.1:5101", ["shop.localhost"], 8081, str(apps / "shop"),
-                     command=[py, "-m", "aegis.range", "run-flask", "app.py", "5101"], cwd=str(apps / "shop"))]
+                     command=[py, "-m", "aegis.range", "run-flask", "app.py", "{port}"], cwd=str(apps / "shop"))]
     if (apps / "dsvw").exists():
         specs.append(AppSpec("dsvw", "http://127.0.0.1:5102", ["dsvw.localhost"], 8082, str(apps / "dsvw"),
-                             command=[py, "dsvw.py", "--port=5102"], cwd=str(apps / "dsvw")))
+                             command=[py, "dsvw.py", "--port={port}"], cwd=str(apps / "dsvw")))
     if (apps / "vulpy").exists():
         bad = apps / "vulpy" / "bad"
         specs.append(AppSpec("vulpy", "http://127.0.0.1:5103", ["vulpy.localhost"], 8083, str(bad),
-                             command=[py, "-m", "aegis.range", "run-flask", "vulpy.py", "5103", "--init", "db_init.py",
+                             command=[py, "-m", "aegis.range", "run-flask", "vulpy.py", "{port}", "--init", "db_init.py",
                                       "--optional", ",".join(OPTIONAL["vulpy"])], cwd=str(bad)))
     return specs
 
@@ -93,7 +93,8 @@ class Supervisor:
         env = dict(os.environ, PYTHONUNBUFFERED="1", **spec.env)
         env["PYTHONPATH"] = os.pathsep.join([str(Path(__file__).resolve().parents[1]), env.get("PYTHONPATH", "")])
         log = open(self.log_dir / f"{spec.name}.log", "ab")
-        self.procs[spec.name] = subprocess.Popen(spec.command, cwd=spec.cwd, env=env, stdout=log, stderr=log)
+        command = [part.replace("{port}", str(port)) for part in spec.command]
+        self.procs[spec.name] = subprocess.Popen(command, cwd=spec.cwd, env=env, stdout=log, stderr=log)
         return _wait(port)
 
     def stop(self, spec: AppSpec) -> None:
@@ -174,7 +175,7 @@ def run_flask(script: str, port: int, init: str | None = None, optional: list[st
             value = value.decode("latin-1")
         return set_cookie(self, key, value, *a, **k)
     flask.Response.set_cookie = compat_set_cookie
-    if init:
+    if init and not os.environ.get("AEGIS_CANARY"):  # a canary keeps the copied data as it is
         runpy.run_path(init, run_name="__main__")
     original = flask.Flask.run
     flask.Flask.run = lambda self, *a, **k: original(self, host="127.0.0.1", port=port, debug=False,

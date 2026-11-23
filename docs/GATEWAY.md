@@ -40,6 +40,32 @@ aegis gateway -c gateway.toml --port 8080 --log-dir logs
 - In `auto` mode the patch is written to the source file; the app process must be restarted to run it (`aegis range` does that for you). In production keep `propose` and ship the `.diff` like any other change.
 - Bind the gateway to `127.0.0.1` (default) unless it sits behind your TLS proxy. If it does, set `options = { trust_proxy = true }` so the real client address is used.
 
+## Learning normal traffic
+
+```toml
+options = { learn = 2000 }          # learn 2,000 clean requests, then also flag what is unusual for this app
+# options = { learn = 2000, strict_paths = true }   # APIs and closed apps: unknown paths too
+```
+
+The profile is kept in `--log-dir` (`<app>.profile.json`) and survives restarts. Delete it after a big release so the
+gateway relearns. On CSIC 2010 this took anomaly detection from 30% to 72% (84% with strict paths) for 2 false alarms
+in 36,000 normal requests; a changing real site will see more false alarms than that closed test shop.
+
+## Canary: patches must keep real traffic working
+
+For every app the gateway can start (`command`, with `{port}` where the port goes, and `cwd`), a patch is accepted only
+after a canary run: the app folder is copied, the patch is written into the copy, the copy starts on a free port, and
+the last 30 distinct clean GET/HEAD requests are replayed against the copy and the live app. A server error, a new
+4xx or a page that changed beyond small differences rejects the patch. If the live app answered the attack itself
+(monitor mode), the attack is replayed against the copy only, and the dashboard says whether the answer changed.
+
+```
+search() patched (AEG001) in 478 ms · canary: 5 real request(s) replayed, all as before; the attack now gets a different answer
+```
+
+The copy works on copies of the app's files, so replays never touch real data. Apps whose state lives elsewhere (a
+shared database) should keep `heal = "propose"`: they get no canary and the diff goes to a human.
+
 ## Aegis Range: the ready-made lab
 
 ```bash

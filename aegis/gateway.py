@@ -29,9 +29,12 @@ from typing import Callable
 from urllib.parse import urlsplit
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
+from .canary import Canary, Recorded, TrafficRecorder
 from .healer import Healer
 from .models import Incident
 from .shield import AegisShield, ShieldConfig
+
+_request = threading.local()  # set by the shield callback when the current request is an incident
 
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
               "transfer-encoding", "upgrade", "content-length", "host"}
@@ -57,8 +60,9 @@ class AppSpec:
 class Proxy:
     """A small, correct reverse proxy as a WSGI app (one upstream)."""
 
-    def __init__(self, spec: AppSpec, timeout: float = 30.0):
+    def __init__(self, spec: AppSpec, timeout: float = 30.0, recorder: TrafficRecorder | None = None):
         self.spec = spec
+        self.recorder = recorder
         u = urlsplit(spec.upstream)
         self.host, self.port = u.hostname or "127.0.0.1", u.port or 80
         self.timeout = timeout
@@ -109,6 +113,15 @@ class Proxy:
             out.append((name, value))
         data = resp.read()  # bodies of these apps are small; buffering keeps Content-Length exact
         conn.close()
+        if self.recorder is not None:
+            incident = getattr(_request, "incident", None)
+            sent = Recorded(environ.get("REQUEST_METHOD", "GET"), raw,
+                            {k: v for k, v in headers.items() if k not in ("Host",) and not k.startswith("X-Forwarded")},
+                            body)
+            if incident:  # an attack the shield let through (monitor): keep the answer for the canary
+                self.recorder.remember_attack(incident, sent, resp.status, data)
+            elif resp.status < 400:
+                self.recorder.add(sent.method, sent.target, sent.headers)
         out.append(("Content-Length", str(len(data))))
         start_response(f"{resp.status} {resp.reason}", out)
         return [data]
@@ -135,10 +148,14 @@ class Gateway:
         self._seen_records: dict[str, int] = {}
         self.started = time.time()
         self.requests: dict[str, int] = {a.name: 0 for a in apps}
+        self.recorders: dict[str, TrafficRecorder] = {}
         for spec in apps:
             callbacks = [lambda inc, s=spec: self._incident(s, inc)]
+            recorder = self.recorders[spec.name] = TrafficRecorder()
             if spec.source and spec.heal in ("auto", "propose"):
-                healer = Healer(spec.source, mode=spec.heal, ai_fixer=ai_fixer, background=True)
+                # Apps the gateway can start get a canary: patches must keep real traffic working.
+                canary = Canary(spec, recorder) if spec.command and (spec.cwd or spec.source) else None
+                healer = Healer(spec.source, mode=spec.heal, ai_fixer=ai_fixer, background=True, replay=canary)
                 self.healers[spec.name] = healer
                 callbacks.append(healer)
             log = str(Path(log_dir) / f"{spec.name}.incidents.jsonl") if log_dir else None
@@ -146,7 +163,7 @@ class Gateway:
             if options.get("learn") and log_dir and "profile_path" not in options:
                 options["profile_path"] = str(Path(log_dir) / f"{spec.name}.profile.json")
             config = ShieldConfig(mode=spec.shield, log_path=log, **options)
-            shield = AegisShield(Proxy(spec), config, on_incident=callbacks)
+            shield = AegisShield(Proxy(spec, recorder=recorder), config, on_incident=callbacks)
             self.shields[spec.name] = shield
             entry = (spec, shield)
             for host in spec.hosts:
@@ -179,7 +196,11 @@ class Gateway:
         spec, shield = entry
         with self._lock:
             self.requests[spec.name] += 1
-        return shield(environ, start_response)
+        _request.incident = None
+        try:
+            return shield(environ, start_response)
+        finally:
+            _request.incident = None
 
     def _dashboard_allowed(self, environ) -> tuple[bool, str | None]:
         from http.cookies import SimpleCookie
@@ -200,6 +221,7 @@ class Gateway:
 
     # ----------------------------------------------------------- events --
     def _incident(self, spec: AppSpec, inc: Incident) -> None:
+        _request.incident = inc.id  # same thread: the proxy records the app's answer to this attack
         with self._lock:
             self.events.appendleft({
                 "id": inc.id, "time": inc.timestamp, "app": spec.name, "type": inc.attack_type,
@@ -223,8 +245,10 @@ class Gateway:
         if rec.patches:
             detail = f"{rec.function}() patched ({', '.join(sorted({p.finding.rule_id for p in rec.patches}))}) " \
                      f"in {rec.total_ms:.0f} ms"
+            if rec.notes:
+                detail += f" · {rec.notes}"
         elif rec.escalations:
-            detail = rec.escalations[0].reason[:160]
+            detail = rec.escalations[0].reason[:220]
         diff = "\n".join(p.diff for p in rec.patches if getattr(p, "diff", ""))[:6000]
         with self._lock:
             for ev in self.events:
