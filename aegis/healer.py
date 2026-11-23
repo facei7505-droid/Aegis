@@ -23,6 +23,7 @@ from .patcher.engine import fix_file
 from .config import TEST_FILES
 from .scanner.astutil import call_name
 from .scanner.engine import FileAnalysis, iter_python_files, scan_source
+from .scanner.project import analyze_project
 
 # Which static rules can be the root cause of a runtime attack class.
 ATTACK_RULES: dict[str, set[str]] = {
@@ -239,7 +240,12 @@ class Healer:
                                              locate_ms=_ms(t0)))
 
         # The sink is often in a helper the handler calls (vulpy: do_login -> libuser.login), so the
-        # handler and the project functions it calls directly are searched, handler first.
+        # handler and the project functions it calls directly are searched, handler first, with
+        # request data followed across modules.
+        try:
+            analyze_project(self.root, list(self._files()))
+        except OSError:
+            pass
         findings, handled, pending = [], set(), []
         for tfile, tfunc in [(file, function)] + self._callees(file, function):
             found = [f for f in scan_source(tfile) if f.function == tfunc and f.rule_id in rules]

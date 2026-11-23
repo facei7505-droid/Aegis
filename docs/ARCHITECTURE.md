@@ -17,6 +17,7 @@ Aegis connects detection, blocking and repair into one loop, and refuses to trus
 ```
 aegis/
   scanner/      ast + taint tracking -> Finding
+    project.py    cross-module taint: request data followed from handlers into helpers, up to 4 levels
     taint.py      what is attacker-controlled, what sanitizes it
     rules.py      11 detection rules (detect only, never fix)
     engine.py     runs rules with context, suppression, excludes
@@ -30,6 +31,7 @@ aegis/
     prompts.py    all prompts in one reviewable file
   shield/
     detectors.py  normalization + weighted signatures for 10 attack classes
+    profile.py    learned traffic profile: per-endpoint parameters, characters, lengths (positive model)
     core.py       framework-independent inspection, bans, incident log, callbacks
     middleware.py WSGI and ASGI adapters
     alerts.py     Telegram / webhook, throttled, off the request thread
@@ -97,7 +99,7 @@ The core uses only the standard library (`ast`, `urllib`, `json`, `difflib`). Th
 
 ## 5. Known limitations
 
-- Intra-procedural taint, Python only, no stored-XSS tracking.
+- Taint crosses function and module boundaries for plain function calls only (not methods, callbacks or objects). Python only, no stored-XSS tracking.
 - Signature-based shield. Small corpora so far.
 - Route mapping covers Flask and FastAPI decorators, and prefixed blueprints/routers when only one route fits. Django URLconfs are not mapped yet: those incidents stay blocked and go to a human.
 - Argument injection (values starting with `-`) is not handled by the command fixer.

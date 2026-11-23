@@ -13,6 +13,7 @@ from typing import Iterable
 from ..models import SEVERITY_ORDER, Finding
 from .astutil import SourceMap, build_parents, enclosing_function, route_info
 from .rules import RULES, Rule
+from .project import EXTRA_TAINT, analyze_project
 from .taint import REQUEST_ATTRS, Taint
 
 SKIP_DIRS = {".git", ".venv", "venv", "env", "__pycache__", "node_modules", "site-packages", ".tox", "build", "dist"}
@@ -43,6 +44,10 @@ class FileAnalysis:
         self.sm = SourceMap(self.source)
         self.parents = build_parents(self.tree)
         self.aliases = import_aliases(self.tree)
+        try:
+            self._abspath = str(Path(path).resolve())
+        except OSError:
+            self._abspath = str(path)
         self._taints: dict[ast.AST | None, Taint] = {}
         self._routes: dict[ast.AST, tuple[str, list[str]] | None] = {}
 
@@ -63,9 +68,17 @@ class FileAnalysis:
                     self_sources = HTTP_SERVER_SOURCES
                 self._routes[func] = route
                 params = [a for a in arg_names if a not in ("self", "cls", "request")] if route else []
+                # Parameters that receive request data from a handler elsewhere in the project.
+                extra = EXTRA_TAINT.get(self._abspath, {}).get(func.name, ())
+                params += [a for a in arg_names if a in extra and a not in params]
                 self._taints[func] = Taint(func.body, params, self_sources)
         route = self._routes.get(func) if func is not None else None
         return NodeContext(self.path, self.tree, self.sm, func, self._taints[func], route, self.aliases)
+
+    def reset_context(self, func) -> None:
+        """Forget the cached taint of a function (its parameters just became tainted)."""
+        self._taints.pop(func, None)
+        self._routes.pop(func, None)
 
     def routes(self) -> list[tuple[str, list[str], str]]:
         """All route handlers in the file: (path, methods, function name)."""
@@ -209,7 +222,9 @@ def iter_python_files(root: str | os.PathLike, exclude: Iterable[str] = ()) -> I
 def scan_path(root: str | os.PathLike, exclude: Iterable[str] = (), disabled: set[str] | None = None,
               errors: list[str] | None = None) -> list[Finding]:
     findings: list[Finding] = []
-    for file in iter_python_files(root, exclude):
+    files = list(iter_python_files(root, exclude))
+    analyze_project(root, files)  # request data that flows into helpers in other modules
+    for file in files:
         try:
             findings.extend(scan_source(str(file), disabled=disabled))
         except (SyntaxError, UnicodeDecodeError, ValueError) as exc:
