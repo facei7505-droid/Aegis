@@ -39,3 +39,20 @@ Running Aegis against third-party data and tools found more problems than any te
 | SecLists | Fullwidth/`%u` encodings and `/* */` around an XSS payload hid it | NFKC + IIS `%u` decoding; payload scored with and without comments and null bytes |
 | DSVW | `http.server` handlers had no route table, so incidents could not be traced | `do_GET`/`do_POST` of a `BaseHTTPRequestHandler` is the handler; `self.path`, `self.headers` are taint sources |
 | vulpy | Blueprint prefix set in `register_blueprint(url_prefix=...)` in another file; sink in a helper module | Prefixes resolved across files; the healer follows the handler's direct calls into project modules |
+
+## Round 3: a second independent reviewer (v1.2.0)
+
+A fresh reviewer, who had not seen the code being written, attacked v1.1 through the gateway with the
+range running. Every finding was reproduced before it was fixed; the fixes were then re-measured on CSIC
+2010 and SecLists: detection numbers and false alarms (0 of 72,000) came out identical to v1.1.
+
+| # | Problem | Severity | Fix | Regression test |
+| --- | --- | --- | --- | --- |
+| 1 | Parameter pollution: `?id=5/*&id=*/UNION/*&id=*/SELECT...` passed, because each value was scored alone and DSVW joins repeats with `,`. Verified end to end against DSVW in block mode | high | Repeated query/form names are also scored joined with `,` and concatenated; password-like fields excluded | `test_comment_split_repeated_parameter_is_reassembled`, `test_repeated_benign_parameters_stay_clean`, `test_relaxed_fields_are_not_reassembled` |
+| 2 | Regex blow-up: 50,000 `{{`, newlines or `'on` made three signatures take 7–30 s per request; one client could stall the shield | high | Every unbounded span in the signatures bounded; values over 8 KB scored in overlapping windows (nothing is skipped). Worst case for a 60 KB value went from 15 s to 81 ms | `test_long_adversarial_values_are_scored_quickly`, `test_payload_past_the_first_window_is_found` |
+| 3 | Dashboard reachable without a token | medium | Already fixed in v1.1 (loopback only, or `--dashboard-token`); the reviewer had an older copy | `test_dashboard_*` |
+| 4 | A 1 MB body with no `Content-Type` was neither inspected past the limit nor refused; the ASGI shield did not inspect bodies of unlisted types at all | low | No type and unknown types now count as form-like; only binary media (`image/*`, archives, `octet-stream`) may exceed the limit, and `binary_uploads = false` closes that too. WSGI and ASGI share one policy | `test_oversized_body_policy` |
+
+**Method note.** Every signature is now timed against 39 adversarial repeats in the test suite
+(`test_every_signature_is_linear_on_adversarial_repeats`): a new signature with an unbounded `.*` or `\s*`
+after a separator is how this class of bug comes back, and CI now catches it.

@@ -38,6 +38,8 @@ class ShieldConfig:
     proxy_hops: int = 1                 # proxies you run in front of the app; the client is that many from the right
     log_path: str | None = None         # JSON Lines incident log
     block_oversized: bool = True        # bodies above the inspection limit cannot hide payloads
+    binary_uploads: bool = True         # ...except binary media (images, archives, octet-stream); set False
+                                        # for apps that parse every body as a form whatever its type
     max_upload: int = 100 * 1024 * 1024  # multipart forms are inspected in full up to this size
     fail_open: bool = True              # on an internal shield error: serve (True) or refuse (False) the request
     max_incidents: int = 1000           # incidents kept in memory (the log file keeps all)
@@ -224,13 +226,21 @@ class ShieldCore:
             fh.write(json.dumps(incident.to_dict(), ensure_ascii=False) + "\n")
 
 
-INSPECTED_TYPES = ("application/x-www-form-urlencoded", "json", "text/", "xml")
+BINARY_TYPES = ("application/octet-stream", "image/", "audio/", "video/", "font/", "application/zip",
+                "application/gzip", "application/x-tar", "application/x-7z", "application/pdf")
 
 
-def is_inspected_type(content_type: str) -> bool:
-    """Bodies whose every byte is application input (an oversized one is suspicious)."""
+def is_binary_type(content_type: str) -> bool:
     ctype = (content_type or "").lower()
-    return any(t in ctype for t in INSPECTED_TYPES)
+    return any(t in ctype for t in BINARY_TYPES)
+
+
+def oversize_is_suspicious(content_type: str, config: ShieldConfig) -> bool:
+    """Whether a body above the inspection limit should be refused. Multipart has its own, larger
+    limit; binary media may legitimately be large unless the app parses every body as a form."""
+    if is_multipart(content_type):
+        return True
+    return not (is_binary_type(content_type) and config.binary_uploads)
 
 
 def is_multipart(content_type: str) -> bool:

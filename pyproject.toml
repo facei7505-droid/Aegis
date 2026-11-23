@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aegis-selfheal"
-version = "1.1.0"
+version = "1.2.0"
 description = "Self-healing application security: find vulnerabilities, block live attacks, and patch the vulnerable line with verified fixes."
 readme = "README.md"
 requires-python = ">=3.10"

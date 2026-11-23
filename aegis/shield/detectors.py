@@ -31,6 +31,9 @@ _WORD_CMDS = (
 )
 _SEP = r"(?:;|&&?|\|\|?|`|\$\(|\n)"
 _C = re.DOTALL  # case-sensitive
+# Bounded horizontal whitespace. Unbounded \s* after a separator that can itself be a newline makes
+# a value of 5,000 newlines quadratic (found in review: one request could stall a worker for seconds).
+_HS = r"[ \t]{0,20}"
 
 SIGNATURES: dict[str, list[tuple[str, re.Pattern, float]]] = {
     "sqli": [
@@ -65,11 +68,11 @@ SIGNATURES: dict[str, list[tuple[str, re.Pattern, float]]] = {
     ],
     "xss": [
         ("script tag", re.compile(r"<\s*script\b", _F), 0.95),
-        ("event handler", re.compile(r"<[^>]*\bon[a-z]{3,}\s*=", _F), 0.9),
+        ("event handler", re.compile(r"<[^<>]{0,300}?\bon[a-z]{3,}[ \t]{0,10}=", _F), 0.9),
         ("attribute breakout", re.compile(
-            r"[\"'`][^<>]*?\bon(focus|blur|error|load|click|dblclick|mouse\w+|pointer\w+|key\w+|input|change|"
+            r"[\"'`][^<>\"'`]{0,200}?\bon(focus|blur|error|load|click|dblclick|mouse\w+|pointer\w+|key\w+|input|change|"
             r"submit|toggle|animation\w+|transition\w+|begin|end|drag\w*|wheel|scroll|copy|paste|auxclick|"
-            r"contextmenu|show|beforeprint)\s*=", _F), 0.9),
+            r"contextmenu|show|beforeprint)[ \t]{0,10}=", _F), 0.9),
         ("javascript url", re.compile(r"j[\s\x00-\x1f]*a[\s\x00-\x1f]*v[\s\x00-\x1f]*a[\s\x00-\x1f]*s[\s\x00-\x1f]*"
                                       r"c[\s\x00-\x1f]*r[\s\x00-\x1f]*i[\s\x00-\x1f]*p[\s\x00-\x1f]*t[\s\x00-\x1f]*:", _F), 0.85),
         ("active tag", re.compile(r"<\s*(iframe|svg|object|embed|math|base|meta|link)\b", _F), 0.7),
@@ -93,21 +96,21 @@ SIGNATURES: dict[str, list[tuple[str, re.Pattern, float]]] = {
         ("encoded dot-dot", re.compile(r"\.\.(%2f|%5c|2f|5c|%c0%af|%c1%9c)", _F), 0.85),
     ],
     "command_injection": [
-        ("chained command", re.compile(_SEP + r"\s*(" + _STRONG_CMDS + r")\b", _F), 0.9),
-        ("chained word command", re.compile(_SEP + r"\s*(" + _WORD_CMDS + r")(?=\s*($|[;&|`#)]))", _C), 0.9),
-        ("piped word command", re.compile(r"(&|\||`|\$\()\s*(" + _WORD_CMDS + r")\b(?!\s*=)", _C), 0.85),
-        ("separated word command", re.compile(r"[;\n]\s*(" + _WORD_CMDS + r")\s(?!\s*=)", _C), 0.75),
-        ("absolute program path", re.compile(_SEP + r"\s*/(usr/)?(local/)?s?bin/\w+", _F), 0.9),
+        ("chained command", re.compile(_SEP + _HS + r"(" + _STRONG_CMDS + r")\b", _F), 0.9),
+        ("chained word command", re.compile(_SEP + _HS + r"(" + _WORD_CMDS + r")(?=[ \t]{0,20}($|[;&|`#)\r\n]))", _C), 0.9),
+        ("piped word command", re.compile(r"(&|\||`|\$\()" + _HS + r"(" + _WORD_CMDS + r")\b(?![ \t]{0,20}=)", _C), 0.85),
+        ("separated word command", re.compile(r"[;\n]" + _HS + r"(" + _WORD_CMDS + r")[ \t](?![ \t]{0,20}=)", _C), 0.75),
+        ("absolute program path", re.compile(_SEP + _HS + r"/(usr/)?(local/)?s?bin/\w+", _F), 0.9),
         ("shell flags", re.compile(r"\s-[a-zA-Z]{1,4}(\s|$)", _C), 0.4),
         ("file argument", re.compile(r"\s[\w./-]+\.(txt|conf|cfg|ini|env|log|key|pem|py|sh|db|sqlite|json|ya?ml|xml|php)\b", _F), 0.5),
-        ("command substitution", re.compile(r"\$\([^)]*\)", _F), 0.85),
-        ("backticks", re.compile(r"`[^`]+`", _F), 0.75),
+        ("command substitution", re.compile(r"\$\([^()]{0,200}\)", _F), 0.85),
+        ("backticks", re.compile(r"`[^`]{1,200}`", _F), 0.75),
         ("logical chaining", re.compile(r"(\|\||&&)\s*\w+", _F), 0.7),
     ],
     "ssti": [
-        ("jinja expression", re.compile(r"\{\{[^}]*[^\w\s.}][^}]*\}\}", _F), 0.85),
-        ("template variable", re.compile(r"\{\{\s*[\w.]+\s*\}\}", _F), 0.4),
-        ("jinja statement", re.compile(r"\{%.*?%\}", _F), 0.85),
+        ("jinja expression", re.compile(r"\{\{(?=[^{}]{0,300}\}\})[\w\s.]{0,300}[^\w\s.{}]", _F), 0.85),
+        ("template variable", re.compile(r"\{\{[ \t]{0,10}[\w.]{1,100}[ \t]{0,10}\}\}", _F), 0.4),
+        ("jinja statement", re.compile(r"\{%[^%]{0,300}%\}", _F), 0.85),
         ("expression language", re.compile(r"[$#]\{.*?\}", _F), 0.5),
         ("arithmetic probe", re.compile(r"[$#]\{\s*\d+\s*[*+/-]\s*\d+\s*\}", _F), 0.85),
         ("python internals", re.compile(r"__(class|mro|subclasses|globals|builtins|init)__", _F), 0.9),
@@ -122,9 +125,9 @@ SIGNATURES: dict[str, list[tuple[str, re.Pattern, float]]] = {
         ("log4shell", re.compile(r"\$\{\s*jndi\s*:", _F), 0.97),
     ],
     "header_injection": [
-        ("crlf set-cookie", re.compile(r"[\r\n]\s*set-cookie\s*:", _F), 0.95),
-        ("crlf framing header", re.compile(r"[\r\n]\s*(content-(length|type)|transfer-encoding|x-forwarded-\w+)\s*:", _F), 0.85),
-        ("crlf redirect header", re.compile(r"[\r\n]\s*(location|refresh)\s*:", _F), 0.6),
+        ("crlf set-cookie", re.compile(r"[\r\n][ \t]{0,10}set-cookie[ \t]{0,10}:", _F), 0.95),
+        ("crlf framing header", re.compile(r"[\r\n][ \t]{0,10}(content-(length|type)|transfer-encoding|x-forwarded-\w+)[ \t]{0,10}:", _F), 0.85),
+        ("crlf redirect header", re.compile(r"[\r\n][ \t]{0,10}(location|refresh)[ \t]{0,10}:", _F), 0.6),
     ],
     "xxe": [
         ("external entity", re.compile(r"<!ENTITY\s+%?\s*\w+\s+(SYSTEM|PUBLIC)\b", _F), 0.95),
@@ -210,7 +213,21 @@ def score_value(value: str) -> tuple[str, float, list[str]]:
     return attack, score, signals
 
 
+WINDOW = 8192   # long values are scored in overlapping windows: bounded time per window, nothing skipped
+OVERLAP = 512
+
+
 def score_all(value: str) -> tuple[str, float, list[str], dict[str, float]]:
+    if len(value) > WINDOW:
+        best: tuple[str, float, list[str], dict[str, float]] = ("", 0.0, [], {})
+        merged: dict[str, float] = {}
+        for start in range(0, len(value), WINDOW - OVERLAP):
+            result = score_all(value[start:start + WINDOW])
+            for k, v in result[3].items():
+                merged[k] = max(merged.get(k, 0.0), v)
+            if result[1] > best[1]:
+                best = result
+        return best[0], best[1], best[2], merged
     texts = variants(value)
     best: tuple[str, float, list[str]] = ("", 0.0, [])
     classes: dict[str, float] = {}
@@ -228,12 +245,33 @@ def score_all(value: str) -> tuple[str, float, list[str], dict[str, float]]:
     return best[0], best[1], best[2], classes
 
 
+REASSEMBLED = {"query", "form"}
+
+
+def reassembled(inputs: list[tuple[str, str, str]], relaxed: set[str]) -> list[tuple[str, str, str]]:
+    """Values a framework rebuilds from repeated parameters (HTTP parameter pollution).
+
+    `?id=5/*&id=*/UNION/*&id=*/SELECT...` is harmless one value at a time, but ASP.NET and many
+    hand-written handlers join repeats with ',' (giving `5/*,*/UNION/*,*/SELECT`), and others
+    concatenate them. Each repeated name is also scored in both joined forms."""
+    groups: dict[tuple[str, str], list[str]] = {}
+    for location, name, value in inputs:
+        if location in REASSEMBLED and name.lower() not in relaxed:
+            groups.setdefault((location, name), []).append(value)
+    out = []
+    for (location, name), values in groups.items():
+        if len(values) > 1:
+            out.append((location, f"{name}[joined]", ",".join(values)))
+            out.append((location, f"{name}[concat]", "".join(values)))
+    return out
+
+
 def analyze(inputs: list[tuple[str, str, str]], threshold: float = 0.8,
             relaxed: set[str] | None = None, relaxed_threshold: float = 0.97) -> Detection | None:
     """Return the strongest detection across all request inputs, if any crosses its threshold."""
     relaxed = relaxed or set()
     strongest: Detection | None = None
-    for location, name, value in inputs:
+    for location, name, value in [*inputs, *reassembled(inputs, relaxed)]:
         if not value:
             continue
         if location == "header" and name.lower() == "user-agent" and SCANNER_AGENTS.search(value):

@@ -11,7 +11,7 @@ import tempfile
 from typing import Callable, Iterable
 
 from ..models import Incident
-from .core import (MAX_BODY, ShieldConfig, ShieldCore, Verdict, block_body, is_inspected_type, is_multipart,
+from .core import (MAX_BODY, ShieldConfig, ShieldCore, Verdict, block_body, is_multipart, oversize_is_suspicious,
                    multipart_fields)
 
 
@@ -114,7 +114,7 @@ class AegisShield:
             path = environ.get("PATH_INFO", "/")
             inputs = self.core.collect_inputs(path, environ.get("QUERY_STRING", ""), headers, body, ctype, fields)
             verdict = self.core.inspect(client, environ.get("REQUEST_METHOD", "GET"), path, inputs,
-                                        oversized and (is_inspected_type(ctype) or is_multipart(ctype)))
+                                        oversized and oversize_is_suspicious(ctype, self.core.config))
         except Exception:  # a bug in the shield: count it, then follow the fail_open policy
             self.errors += 1
             if self.core.config.fail_open:
@@ -160,7 +160,6 @@ class AegisShieldASGI:
             headers[key] = f"{headers[key]}; {value}" if key == "cookie" and key in headers else value
 
         ctype = headers.get("content-type", "")
-        inspect_body = is_inspected_type(ctype)
         multipart = is_multipart(ctype)
         limit = self.core.config.max_upload if multipart else MAX_BODY
         head = bytearray()
@@ -174,7 +173,7 @@ class AegisShieldASGI:
                 break
             chunk = message.get("body", b"")
             size += len(chunk)
-            if (inspect_body or multipart) and len(head) < limit:
+            if len(head) < limit:  # the head of every body is inspected, as in the WSGI shield
                 head += chunk[: limit - len(head)]
             more = message.get("more_body", False)
         body = bytes(head)
@@ -186,7 +185,7 @@ class AegisShieldASGI:
             fields = multipart_fields(io.BytesIO(body), ctype) if multipart else None
             inputs = self.core.collect_inputs(path, query, headers, body, ctype, fields)
             verdict = self.core.inspect(client, scope.get("method", "GET"), path, inputs,
-                                        (inspect_body or multipart) and size > limit)
+                                        size > limit and oversize_is_suspicious(ctype, self.core.config))
         except Exception:  # a bug in the shield: count it, then follow the fail_open policy
             self.errors += 1
             verdict = Verdict(not self.core.config.fail_open, error=True)

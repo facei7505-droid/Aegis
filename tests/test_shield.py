@@ -8,6 +8,7 @@ from flask import Flask, request
 from aegis.models import Incident
 from aegis.shield import AegisShield, AegisShieldASGI, ShieldConfig, score_value
 from aegis.shield.alerts import TelegramAlerter, format_alert
+from aegis.shield.core import ShieldCore
 
 ATTACKS = [
     "admin' --", "' OR '1'='1", "x' UNION SELECT password FROM users--", "1 or 1=1", "1; DROP TABLE users",
@@ -363,3 +364,78 @@ def test_local_referer_is_not_ssrf():
     assert r.status_code == 200
     r = c.get("/search", query_string={"q": "laptop"}, headers={"Referer": "http://x/<script>alert(1)</script>"})
     assert r.status_code == 403
+
+
+# --- second review (round 3): parameter pollution, regex blow-up, oversized bodies -----------------
+
+def test_comment_split_repeated_parameter_is_reassembled():
+    core = ShieldCore(ShieldConfig(mode="block"))
+    split = "id=5/*&id=*/UNION/*&id=*/ALL/*&id=*/SELECT/*&id=*/NULL,password/*&id=*/FROM/*&id=*/users"
+    verdict = core.inspect("10.0.0.1", "GET", "/", core.collect_inputs("/", split, {}, b"", ""))
+    assert verdict.blocked and verdict.incident.attack_type == "sqli"
+    assert verdict.incident.param.startswith("id[")
+
+
+def test_repeated_benign_parameters_stay_clean():
+    core = ShieldCore(ShieldConfig(mode="block"))
+    for query in ("tag=red&tag=blue&tag=green", "id=1&id=2&id=3", "sort=name&sort=-date",
+                  "q=select a plan&q=from our shop"):
+        assert not core.inspect("10.0.0.2", "GET", "/", core.collect_inputs("/", query, {}, b"", "")).blocked, query
+
+
+def test_relaxed_fields_are_not_reassembled():
+    core = ShieldCore(ShieldConfig(mode="block"))
+    body = b"password=a' OR '&password=1'='1"
+    inputs = core.collect_inputs("/login", "", {}, body, "application/x-www-form-urlencoded")
+    assert not [i for i in inputs if "[" in i[1]]
+    from aegis.shield.detectors import reassembled
+    assert reassembled(inputs, {"password"}) == []
+
+
+def test_long_adversarial_values_are_scored_quickly():
+    import time
+    from urllib.parse import urlencode
+    core = ShieldCore(ShieldConfig(mode="monitor", ban_after=0))
+    for chunk in ("{{", "\n", "'on", "<", "<a on", "$(", "`", "' or ", "%0a", "{%"):
+        value = (chunk * (50_000 // len(chunk)))[:50_000]
+        t = time.perf_counter()
+        core.inspect("10.0.0.3", "GET", "/s", core.collect_inputs("/s", urlencode({"q": value}), {}, b"", ""))
+        assert time.perf_counter() - t < 1.0, chunk
+
+
+def test_payload_past_the_first_window_is_found():
+    from aegis.shield.detectors import WINDOW, score_all
+    value = "x" * (WINDOW * 3) + " UNION ALL SELECT password FROM users"
+    assert score_all(value)[0] == "sqli"
+
+
+def test_oversized_body_policy():
+    from aegis.shield.core import oversize_is_suspicious
+    cfg = ShieldConfig()
+    assert oversize_is_suspicious("", cfg)                      # no type: parsed as a form by many apps
+    assert oversize_is_suspicious("application/x-www-form-urlencoded", cfg)
+    assert oversize_is_suspicious("application/x-custom", cfg)  # unknown types are not trusted
+    assert not oversize_is_suspicious("application/octet-stream", cfg)
+    assert not oversize_is_suspicious("image/png", cfg)
+    assert oversize_is_suspicious("application/octet-stream", ShieldConfig(binary_uploads=False))
+
+
+ADVERSARIAL = ["'", '"', "<", ">", "{", "}", "(", ")", " ", "a", "1", "on", "{{", "{%", "<a ", "' or ", "%",
+               "\\", "/", ";", "=", "&", "|", "-", "\n", "\r\n", ".", ",", "$(", "`", "../", "or 1", "<x on",
+               "'on", "x\"on", "/*", "*/", "union ", "select "]
+
+
+def test_every_signature_is_linear_on_adversarial_repeats():
+    """A new signature with an unbounded span after a separator is how regex blow-up comes back."""
+    import time
+    from aegis.shield.detectors import SIGNATURES
+    slow = []
+    for cls, sigs in SIGNATURES.items():
+        for name, pattern, _ in sigs:
+            for chunk in ADVERSARIAL:
+                value = (chunk * (5000 // len(chunk)))[:5000]
+                t = time.perf_counter()
+                pattern.search(value)
+                if time.perf_counter() - t > 0.05:
+                    slow.append(f"{cls}/{name} on {chunk!r}")
+    assert not slow, slow

@@ -58,10 +58,12 @@ Reproduce with `python benchmarks/run.py --real-world` (full details in [BENCHMA
 | | |
 | --- | --- |
 | False alarms on 72,000 normal requests of the public CSIC 2010 dataset (test half never seen while tuning) | **0** |
+| CSIC 2010 anomalies caught: signatures → + learned traffic profile → + strict paths (2 false alarms in 36,000) | **30 % → 72 % → 84 %** |
 | SecLists payload lists held out from tuning: LFI / MSSQL injection / XSS | **9→70 % and 63→91 % / 41→82 % / 78→82 %** detected (before → after) |
 | sqlmap against DSVW (a real vulnerable app by sqlmap's author): unprotected → behind Aegis Gateway | **table dumped → "not injectable"**, also with `--random-agent --tamper --level 3` |
 | Same sqlmap run after Aegis healed the code, **with no shield at all** | **"not injectable"** |
 | Holes healed live in other people's code (DSVW, vulpy) | SQL injection ×4, command injection, path traversal ×2, a login bypass whose sink was in a helper module |
+| Every heal in the range checked by a canary: recent real requests replayed against the patched copy | **all answers as before**; the attack's answer changed |
 
 ## Why this is different
 
@@ -211,23 +213,26 @@ A separate reviewer agent tried to break Aegis: 18 confirmed findings, from a sh
 - **Taint follows request data into project functions** the handler calls (same file, `import mod`, `from mod import f`), up to four levels deep. Methods, dynamic dispatch and data passed through objects or globals are not followed. Stored XSS (attacker data saved to the DB and rendered later) is not tracked. Django and FastAPI coverage is narrower than Flask (`HttpResponse`, `HTMLResponse` and `FileResponse` are covered; class-based views and DRF are not yet).
 - **Argument injection.** An argument list stops shell injection, but a value starting with `-` can still be read as an option by the program (`curl`, `tar`). Aegis does not add `--` for you.
 - **Path fixes use `os.path.basename`.** Safe, but it also drops legitimate sub-folders in the user's part. Containment checks with `realpath` are on the roadmap.
-- **The shield is signature-based** with normalization. It is not a replacement for a mature WAF against a determined attacker, and its corpora are small (see BENCHMARKS.md, including the held-out misses). Signatures are the first layer; fixing the code is the point.
+- **The shield is signatures plus an optional learned profile.** It is not a replacement for a mature WAF against a determined attacker (see BENCHMARKS.md and REAL_WORLD.md, including the held-out misses). Signatures are the first layer; fixing the code is the point.
+- **Bodies above the inspection limit (1 MB).** Form-like and untyped bodies above it are refused; binary media (`image/*`, archives, `octet-stream`) pass so uploads keep working. Set `binary_uploads = false` for apps that parse every body as a form.
+- **Parameter pollution** is covered for repeated names (joined with `,` and concatenated). A payload split across *different* parameter names that the app glues together is not reassembled.
 - **Self-healing on a live server** patches the source file. Your process still needs a reload, or a deploy for `propose` mode, before the fix is live. Until then the shield keeps blocking.
-- The demo app is synthetic. The next milestone is pilots on real codebases.
+- The range runs third-party apps (DSVW, vulpy) and real tools (sqlmap, commix), but on one machine with one attacker. The next milestone is pilots on real, maintained codebases.
 
 ## Roadmap
 
-- Inter-procedural taint and stored-XSS tracking
+Done since v1.0: cross-module taint, canary on recorded traffic before a patch goes live, live dashboard,
+learned traffic profile, real-data evaluation (CSIC 2010, SecLists, sqlmap, commix), two outside reviews.
+
+- Stored-XSS tracking and taint through methods and objects
 - JavaScript/TypeScript (Express, Next.js) support
-- Hot reload with canary traffic after an `auto` heal
-- Independent evaluation on public payload corpora and the OWASP Benchmark
-- Dashboard for incidents and pending patches
+- The OWASP Benchmark for the scanner
 
 ## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                     # 280+ tests, incl. property tests on 300 SQL queries and 200 shell commands
+pytest -q                     # 310+ tests, incl. property tests on 300 SQL queries and 200 shell commands
 python benchmarks/run.py      # regenerates BENCHMARKS.md
 aegis scan .                  # Aegis scans itself in CI
 ```

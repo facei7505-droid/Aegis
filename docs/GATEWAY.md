@@ -39,6 +39,7 @@ aegis gateway -c gateway.toml --port 8080 --log-dir logs
 - The gateway forwards the request target byte for byte, adds `X-Forwarded-For/Host/Proto`, rewrites redirects that point at the hidden upstream, and answers 502 if an app is down.
 - In `auto` mode the patch is written to the source file; the app process must be restarted to run it (`aegis range` does that for you). In production keep `propose` and ship the `.diff` like any other change.
 - Bind the gateway to `127.0.0.1` (default) unless it sits behind your TLS proxy. If it does, set `options = { trust_proxy = true }` so the real client address is used.
+- Bodies over 1 MB are refused unless they are binary media (images, archives, `octet-stream`), so uploads keep working. If an app reads every body as a form whatever its type, set `options = { binary_uploads = false }`.
 
 ## Learning normal traffic
 
