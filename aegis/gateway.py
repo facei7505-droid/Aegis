@@ -130,24 +130,29 @@ class Gateway:
 
     def set_apps(self, apps: list[AppSpec]) -> dict[str, list[str]]:
         """Apply a new list of apps without a restart. Unchanged apps keep their shield, bans and
-        counters; changed apps get a new shield; removed apps stop being routed."""
+        counters; changed apps get a new shield; removed apps stop being routed.
+
+        Routes are replaced in place, never removed first: a request arriving mid-reload reaches
+        either the old shield or the new one, never "unknown host"."""
         with self._lock:
             old = {a.name: a for a in self.apps}
             new = {a.name: a for a in apps}
             added = [n for n in new if n not in old]
             removed = [n for n in old if n not in new]
             changed = [n for n in new if n in old and new[n] != old[n]]
-            for name in removed + changed:
-                spec = old[name]
-                for host in spec.hosts:
-                    if self.by_host.get(host.lower(), (None,))[0] is spec:
-                        del self.by_host[host.lower()]
-                if spec.listen and self.by_port.get(spec.listen, (None,))[0] is spec:
-                    del self.by_port[spec.listen]
+            for name in changed:
+                self.healers.pop(name, None)          # _mount adds it back if the app still heals
+            for name in added + changed:
+                self._mount(new[name])                # overwrites this app's host and port routes
+            live_hosts = {h.lower() for a in apps for h in a.hosts}
+            for host in [h for h in self.by_host if h not in live_hosts]:
+                del self.by_host[host]
+            live_ports = {a.listen for a in apps if a.listen}
+            for port in [p for p in self.by_port if p not in live_ports]:
+                del self.by_port[port]
+            for name in removed:
                 self.shields.pop(name, None)
                 self.healers.pop(name, None)
-            for name in added + changed:
-                self._mount(new[name])
             self.apps = list(apps)
         return {"added": added, "removed": removed, "changed": changed}
 

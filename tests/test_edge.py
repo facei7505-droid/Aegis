@@ -107,7 +107,7 @@ def test_registry_is_atomic_and_refuses_duplicates(tmp_path):
 @pytest.fixture
 def edge(tmp_path, shop):
     reg = Registry(tmp_path / "sites.json")
-    reg.add(Site("shop.kz", shop, "wordpress", aliases=["www.shop.kz"], chats=[222]), learn_days=0)
+    reg.add(Site("shop.kz", shop, "wordpress", aliases=["www.shop.kz"], chats=[222], rate_limit=100_000), learn_days=0)
     e = Edge(tmp_path)
     port = free_port()
     servers = e.start(port)
@@ -136,9 +136,23 @@ def test_new_sites_and_pauses_apply_without_restart(edge, shop):
     reg.add(Site("second.kz", shop), learn_days=0)
     assert wait_for(lambda: get(port, "second.kz")[0] == 200)
     shield_before = e.gateway.shields["shop.kz"]
+    stop = threading.Event()
+    seen = []
+
+    def hammer():  # requests during the reload must never miss the site
+        while not stop.is_set():
+            seen.append(get(port, "shop.kz")[1])
+
+    worker = threading.Thread(target=hammer)
+    worker.start()
     reg.update("shop.kz", mode="monitor")
-    assert wait_for(lambda: get(port, "shop.kz", "/?author=1")[0] == 200)  # paused: recorded, not blocked
-    assert e.gateway.shields["shop.kz"] is not shield_before
+    assert wait_for(lambda: e.gateway.shields.get("shop.kz") not in (None, shield_before))
+    stop.set()
+    worker.join()
+    bad = {b[:120] for b in seen if "Магазин".encode() not in b}
+    assert seen and not bad, bad
+    status, body = get(port, "shop.kz", "/?author=1")          # paused: recorded, not blocked
+    assert status == 200 and "Магазин".encode() in body
     assert e.gateway.shields["second.kz"] is not None
 
 
