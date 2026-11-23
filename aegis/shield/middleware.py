@@ -11,7 +11,7 @@ import tempfile
 from typing import Callable, Iterable
 
 from ..models import Incident
-from .core import (MAX_BODY, ShieldConfig, ShieldCore, Verdict, block_body, is_multipart, oversize_is_suspicious,
+from .core import (MAX_BODY, ShieldConfig, ShieldCore, Verdict, block_response, is_multipart, oversize_is_suspicious,
                    multipart_fields)
 
 
@@ -111,6 +111,7 @@ class AegisShield:
                 for key, value in environ.items() if key.startswith("HTTP_")
             }
             client = self.core.client_ip(environ.get("REMOTE_ADDR", "unknown"), headers.get("x-forwarded-for"))
+            environ["aegis.client_ip"] = client
             path = environ.get("PATH_INFO", "/")
             inputs = self.core.collect_inputs(path, environ.get("QUERY_STRING", ""), headers, body, ctype, fields)
             verdict = self.core.inspect(client, environ.get("REQUEST_METHOD", "GET"), path, inputs,
@@ -121,17 +122,24 @@ class AegisShield:
                 return self.app(environ, start_response)
             verdict = Verdict(True, error=True)
         if verdict.blocked:
-            return _wsgi_block(start_response, verdict)
+            return _wsgi_block(start_response, verdict, environ.get("HTTP_ACCEPT", ""))
         return self.app(environ, start_response)
 
 
-def _wsgi_block(start_response, verdict: Verdict):
-    payload = block_body(verdict)
-    start_response("403 Forbidden", [
-        ("Content-Type", "application/json"),
-        ("Content-Length", str(len(payload))),
-        ("X-Aegis-Incident", verdict.incident.id if verdict.incident else ("error" if verdict.error else "ban")),
-    ])
+STATUS_LINES = {403: "403 Forbidden", 429: "429 Too Many Requests"}
+
+
+def _block_headers(verdict: Verdict, ctype: str, size: int) -> list[tuple[str, str]]:
+    headers = [("Content-Type", ctype), ("Content-Length", str(size)), ("Cache-Control", "no-store"),
+               ("X-Aegis-Incident", verdict.incident.id if verdict.incident else ("error" if verdict.error else "ban"))]
+    if verdict.retry_after:
+        headers.append(("Retry-After", str(verdict.retry_after)))
+    return headers
+
+
+def _wsgi_block(start_response, verdict: Verdict, accept: str = ""):
+    ctype, payload = block_response(verdict, accept)
+    start_response(STATUS_LINES.get(verdict.status, "403 Forbidden"), _block_headers(verdict, ctype, len(payload)))
     return [payload]
 
 
@@ -190,12 +198,9 @@ class AegisShieldASGI:
             self.errors += 1
             verdict = Verdict(not self.core.config.fail_open, error=True)
         if verdict.blocked:
-            payload = block_body(verdict)
-            await send({"type": "http.response.start", "status": 403, "headers": [
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(payload)).encode()),
-                (b"x-aegis-incident", (verdict.incident.id if verdict.incident else ("error" if verdict.error else "ban")).encode()),
-            ]})
+            ctype, payload = block_response(verdict, headers.get("accept", ""))
+            await send({"type": "http.response.start", "status": verdict.status, "headers": [
+                (k.lower().encode(), v.encode()) for k, v in _block_headers(verdict, ctype, len(payload))]})
             await send({"type": "http.response.body", "body": payload})
             return
 

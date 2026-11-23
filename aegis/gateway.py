@@ -12,12 +12,11 @@ code-healing part needs Python source.
 Routing is by Host header (`shop.localhost:8080`, `*.localhost` resolves to 127.0.0.1 in modern
 browsers and curl) or by a dedicated port per app (`listen = 8081`).
 
-Standard library only: wsgiref + http.client.
+Standard library only: wsgiref + http.client (see proxy.py).
 """
 from __future__ import annotations
 
 import hmac
-import http.client
 import json
 import socketserver
 import threading
@@ -26,19 +25,15 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
-from urllib.parse import urlsplit
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
 from .canary import Canary, Recorded, TrafficRecorder
 from .healer import Healer
 from .models import Incident
+from .proxy import Origin, Proxy
 from .shield import AegisShield, ShieldConfig
 
 _request = threading.local()  # set by the shield callback when the current request is an incident
-
-HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
-              "transfer-encoding", "upgrade", "content-length", "host"}
-
 
 @dataclass
 class AppSpec:
@@ -53,78 +48,28 @@ class AppSpec:
     cwd: str | None = None
     env: dict[str, str] = field(default_factory=dict)
     options: dict = field(default_factory=dict)  # extra ShieldConfig settings, e.g. {ban_after = 0}
+    preserve_host: bool = False            # customer sites: keep the public Host, TLS to the origin by site name
+    tls_verify: bool = True                # check the origin certificate (https:// upstreams)
+    sni: str | None = None                 # SNI / certificate name for the origin; default: the public Host
 
 
 # ------------------------------------------------------------------ proxy --
 
-class Proxy:
-    """A small, correct reverse proxy as a WSGI app (one upstream)."""
+def make_proxy(spec: AppSpec, recorder: TrafficRecorder | None = None) -> Proxy:
+    """The proxy for one app; with a recorder, clean traffic and attack answers are kept for the canary."""
+    origin = Origin(spec.upstream, preserve_host=spec.preserve_host, tls_verify=spec.tls_verify, sni=spec.sni)
 
-    def __init__(self, spec: AppSpec, timeout: float = 30.0, recorder: TrafficRecorder | None = None):
-        self.spec = spec
-        self.recorder = recorder
-        u = urlsplit(spec.upstream)
-        self.host, self.port = u.hostname or "127.0.0.1", u.port or 80
-        self.timeout = timeout
+    def record(environ, target, headers, body, status, data):
+        sent = Recorded(environ.get("REQUEST_METHOD", "GET"), target,
+                        {k: v for k, v in headers.items()
+                         if k not in ("Host", "Content-Length", "X-Real-Ip") and not k.startswith("X-Forwarded")}, body)
+        incident = getattr(_request, "incident", None)
+        if incident:  # an attack the shield let through (monitor): keep the answer for the canary
+            recorder.remember_attack(incident, sent, status, data or b"")
+        elif status < 400:
+            recorder.add(sent.method, sent.target, sent.headers)
 
-    def __call__(self, environ, start_response):
-        raw = environ.get("RAW_URI") or (environ.get("PATH_INFO", "/") +
-                                         ("?" + environ["QUERY_STRING"] if environ.get("QUERY_STRING") else ""))
-        if raw.startswith("http://") or raw.startswith("https://"):  # absolute-form request line
-            parts = urlsplit(raw)
-            raw = parts.path + ("?" + parts.query if parts.query else "")
-        headers = {}
-        for key, value in environ.items():
-            if key.startswith("HTTP_"):
-                name = key[5:].replace("_", "-").title()
-                if name.lower() not in HOP_BY_HOP:
-                    headers[name] = value
-        if environ.get("CONTENT_TYPE"):
-            headers["Content-Type"] = environ["CONTENT_TYPE"]
-        public_host = environ.get("HTTP_HOST", f"localhost:{environ.get('SERVER_PORT', '')}")
-        headers["Host"] = f"{self.host}:{self.port}"
-        headers["X-Forwarded-For"] = environ.get("REMOTE_ADDR", "")
-        headers["X-Forwarded-Host"] = public_host
-        headers["X-Forwarded-Proto"] = environ.get("wsgi.url_scheme", "http")
-        try:
-            length = int(environ.get("CONTENT_LENGTH") or 0)
-        except ValueError:
-            length = 0
-        body = environ["wsgi.input"].read(length) if length > 0 else None
-        conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
-        try:
-            conn.request(environ.get("REQUEST_METHOD", "GET"), raw, body=body, headers=headers)
-            resp = conn.getresponse()
-        except OSError as exc:
-            conn.close()
-            msg = f"Aegis Gateway: {self.spec.name} is not reachable ({exc.__class__.__name__})".encode()
-            start_response("502 Bad Gateway", [("Content-Type", "text/plain; charset=utf-8"),
-                                               ("Content-Length", str(len(msg)))])
-            return [msg]
-        out = []
-        for name, value in resp.getheaders():
-            low = name.lower()
-            if low in HOP_BY_HOP:
-                continue
-            if low == "location":  # keep redirects on the gateway, not on the hidden upstream
-                for upstream in (f"http://{self.host}:{self.port}", f"http://localhost:{self.port}"):
-                    if value.startswith(upstream):
-                        value = f"http://{public_host}" + value[len(upstream):]
-            out.append((name, value))
-        data = resp.read()  # bodies of these apps are small; buffering keeps Content-Length exact
-        conn.close()
-        if self.recorder is not None:
-            incident = getattr(_request, "incident", None)
-            sent = Recorded(environ.get("REQUEST_METHOD", "GET"), raw,
-                            {k: v for k, v in headers.items() if k not in ("Host",) and not k.startswith("X-Forwarded")},
-                            body)
-            if incident:  # an attack the shield let through (monitor): keep the answer for the canary
-                self.recorder.remember_attack(incident, sent, resp.status, data)
-            elif resp.status < 400:
-                self.recorder.add(sent.method, sent.target, sent.headers)
-        out.append(("Content-Length", str(len(data))))
-        start_response(f"{resp.status} {resp.reason}", out)
-        return [data]
+    return Proxy(origin, spec.name, on_response=record if recorder is not None else None)
 
 
 # ---------------------------------------------------------------- gateway --
@@ -163,7 +108,7 @@ class Gateway:
             if options.get("learn") and log_dir and "profile_path" not in options:
                 options["profile_path"] = str(Path(log_dir) / f"{spec.name}.profile.json")
             config = ShieldConfig(mode=spec.shield, log_path=log, **options)
-            shield = AegisShield(Proxy(spec, recorder=recorder), config, on_incident=callbacks)
+            shield = AegisShield(make_proxy(spec, recorder), config, on_incident=callbacks)
             self.shields[spec.name] = shield
             entry = (spec, shield)
             for host in spec.hosts:

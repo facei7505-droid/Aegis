@@ -1,0 +1,69 @@
+{
+ "wordpress": "7.2-RC2 (github.com/WordPress/WordPress), SQLite, PHP 8.3 built-in server",
+ "browser": "Google Chrome via Playwright",
+ "baseline_monitor_no_preset": {
+  "requests": 2239,
+  "would_block": 3,
+  "what": [
+   "post with Kaspi button onclick and map iframe (REST)",
+   "page with Yandex.Metrika counter (REST)",
+   "comment blocklist setting with attack strings"
+  ]
+ },
+ "block_mode_wordpress_preset": {
+  "requests": 2247,
+  "blocked": 0,
+  "steps_ok": 21,
+  "steps": 21
+ },
+ "attacks_block_mode": {
+  "brute_force": {
+   "attempts": 40,
+   "answered_by_wordpress": 10,
+   "refused_429": 30,
+   "first_refused_at": 11,
+   "site_still_readable": true
+  },
+  "xmlrpc_multicall": 403,
+  "xmlrpc_pingback": 403,
+  "author_enum": 403,
+  "rest_users": 403,
+  "rest_users_pretty": 403,
+  "upload_shell": 403,
+  "debug_log": 403,
+  "wp_config_backup": 403,
+  "wpscan_agent": 403,
+  "spoofed_editor_post": {
+   "status": 401,
+   "wordpress_answer": "{\"code\":\"rest_cannot_create\",\"message\":\"Sorry, you are not allowed to create posts as this user.\",\"data\":{\"status\":401}}"
+  },
+  "flood": {
+   "requests": 400,
+   "ok": 150,
+   "refused_429": 250,
+   "first_refused_at": 151
+  },
+  "payloads": {
+   "sqli": {
+    "sent": 150,
+    "blocked": 100,
+    "rate": 0.667
+   },
+   "xss": {
+    "sent": 110,
+    "blocked": 110,
+    "rate": 1.0
+   },
+   "traversal": {
+    "sent": 150,
+    "blocked": 126,
+    "rate": 0.84
+   },
+   "cmd": {
+    "sent": 150,
+    "blocked": 150,
+    "rate": 1.0
+   }
+  }
+ }
+}

@@ -46,6 +46,11 @@ class ShieldConfig:
     learn: int = 0                      # learn this many clean requests, then flag what is unusual (0 = off)
     profile_path: str | None = None     # keep the learned traffic profile here (JSON) across restarts
     strict_paths: bool = False          # once learned, also flag paths never seen (good for closed apps and APIs)
+    preset: str | None = None           # site policy: generic | wordpress | bitrix | opencart (see policy.py)
+    rate_limit: int = 0                 # page requests per minute per client (static files not counted; 0 = off)
+    login_limit: int = 0                # login attempts per client inside login_window (0 = off)
+    login_window: float = 600.0
+    login_lockout: float = 1800.0       # login is refused this long; the rest of the site stays open
 
 
 @dataclass
@@ -54,6 +59,9 @@ class Verdict:
     incident: Incident | None = None
     banned: bool = False
     error: bool = False  # the shield itself failed (see ShieldConfig.fail_open)
+    status: int = 403    # 429 for rate limits
+    retry_after: int = 0  # seconds, sent as Retry-After when set
+    reason: str = ""     # why, when there is no incident (repeat hits of a lockout)
 
 
 class ShieldCore:
@@ -68,6 +76,11 @@ class ShieldCore:
         self._strikes: dict[str, deque] = defaultdict(deque)
         self._banned: dict[str, float] = {}
         self._lock = threading.Lock()
+        from .policy import preset as _preset
+        self.policy = _preset(self.config.preset)
+        self._rate: dict[str, list] = {}               # client -> [window start, count]
+        self._logins: dict[str, deque] = defaultdict(deque)
+        self._locked: dict[str, float] = {}             # client -> login lockout end
         self.profile = None
         if self.config.learn or self.config.profile_path:
             from .profile import TrafficProfile
@@ -157,7 +170,20 @@ class ShieldCore:
                 del self._banned[client]
 
         t0 = time.perf_counter()
-        det = analyze(inputs, cfg.threshold, cfg.relaxed_params, cfg.relaxed_threshold)
+        req = None
+        if self.policy is not None or cfg.rate_limit or cfg.login_limit:
+            from .policy import STATIC, Request
+            req = Request.build(method, path, inputs)
+            limited = self._limits(req, client, now, STATIC)
+            if limited is not None:
+                return limited
+            patch = self.policy.patch(req) if self.policy else None
+            if patch is not None:
+                det = Detection("virtual_patch", 1.0, [patch.name, patch.reason], req.route, "path", patch.name,
+                                {"virtual_patch": 1.0})
+                return self._incident(det, client, method, path, now, (time.perf_counter() - t0) * 1000)
+        ignore = self.policy.ignored(req) if (self.policy is not None and req is not None) else None
+        det = analyze(inputs, cfg.threshold, cfg.relaxed_params, cfg.relaxed_threshold, ignore)
         if det is None and oversized and cfg.block_oversized:
             det = Detection("oversized_body", 0.9, ["body larger than the inspection limit"],
                             "", "body", "body", {"oversized_body": 0.9})
@@ -166,13 +192,79 @@ class ShieldCore:
         detect_ms = (time.perf_counter() - t0) * 1000
         if det is None:
             return Verdict(False)
+        return self._incident(det, client, method, path, now, detect_ms)
 
+    # ----------------------------------------------------------- limits --
+    def _limits(self, req, client: str, now: float, static) -> Verdict | None:
+        """Login lockouts and request-rate limits. Both answer 429 and never ban the whole address."""
+        cfg = self.config
+        block = cfg.mode == "block"
+        if cfg.rate_limit and not static.search(req.path):
+            with self._lock:
+                window = self._rate.get(client)
+                if window is None or now - window[0] >= 60:
+                    if len(self._rate) > 50_000:
+                        self._rate = {k: v for k, v in self._rate.items() if now - v[0] < 60}
+                    window = self._rate[client] = [now, 0]
+                window[1] += 1
+                count, started = window[1], window[0]
+            if count > cfg.rate_limit:
+                retry = max(1, int(60 - (now - started)))
+                if count == cfg.rate_limit + 1:  # one incident per window, not one per request
+                    det = Detection("rate_limit", 1.0, [f"more than {cfg.rate_limit} page requests a minute"],
+                                    req.route, "path", "rate", {"rate_limit": 1.0})
+                    verdict = self._incident(det, client, req.method, req.path, now, 0.0, strike=False)
+                    return Verdict(verdict.blocked, verdict.incident, status=429, retry_after=retry) if block else None
+                return Verdict(True, status=429, retry_after=retry, reason="rate_limit") if block else None
+
+        if cfg.login_limit and self.policy is not None and self.policy.is_login(req):
+            with self._lock:
+                until = self._locked.get(client, 0)
+                if until > now:
+                    locked_for = int(until - now)
+                else:
+                    locked_for = 0
+                    attempts = self._logins[client]
+                    attempts.append(now)
+                    while attempts and now - attempts[0] > cfg.login_window:
+                        attempts.popleft()
+                    tripped = len(attempts) > cfg.login_limit
+                    if tripped:
+                        self._locked[client] = now + cfg.login_lockout
+                        attempts.clear()
+                    if len(self._logins) > 50_000:
+                        for key in [k for k, v in self._logins.items() if not v]:
+                            del self._logins[key]
+            if locked_for:
+                return Verdict(True, status=429, retry_after=locked_for, reason="brute_force") if block else None
+            if tripped:
+                det = Detection("brute_force", 1.0,
+                                [f"more than {cfg.login_limit} login attempts in {int(cfg.login_window // 60)} min"],
+                                req.route, "path", "login", {"brute_force": 1.0})
+                verdict = self._incident(det, client, req.method, req.path, now, 0.0, strike=False)
+                return Verdict(verdict.blocked, verdict.incident, status=429,
+                               retry_after=int(cfg.login_lockout)) if block else None
+        return None
+
+    def unlock(self, client: str) -> bool:
+        """Lift every block on an address (ban, login lockout, rate window). True if one was active."""
+        with self._lock:
+            found = bool(self._banned.pop(client, None)) | bool(self._locked.pop(client, None))
+            self._rate.pop(client, None)
+            self._strikes.pop(client, None)
+            self._logins.pop(client, None)
+        return found
+
+    # --------------------------------------------------------- incidents --
+    def _incident(self, det: Detection, client: str, method: str, path: str, now: float, detect_ms: float,
+                  strike: bool = True) -> Verdict:
+        cfg = self.config
         blocked = cfg.mode == "block"
         incident = Incident(
             id=uuid.uuid4().hex[:12], timestamp=now, client=client, method=method, path=path,
-            location=det.location, param=det.param, payload=det.value[:500], attack_type=det.attack_type,
-            score=det.score, blocked=blocked, detect_ms=round(detect_ms, 3), signals=det.signals,
-            classes=det.classes,
+            location=det.location, param=det.param, payload=mask(det.param, det.value)[:500],
+            attack_type=det.attack_type, score=det.score, blocked=blocked, detect_ms=round(detect_ms, 3),
+            signals=det.signals, classes=det.classes,
         )
         with self._lock:
             self.incidents.append(incident)
@@ -184,13 +276,14 @@ class ShieldCore:
                     del self._strikes[key]
                 for key in [k for k, until in self._banned.items() if until <= now]:
                     del self._banned[key]
-            strikes = self._strikes[client]
-            strikes.append(now)
-            while strikes and now - strikes[0] > cfg.ban_window:
-                strikes.popleft()
-            if cfg.ban_after and len(strikes) >= cfg.ban_after:
-                self._banned[client] = now + cfg.ban_seconds
-                strikes.clear()
+            if strike:
+                strikes = self._strikes[client]
+                strikes.append(now)
+                while strikes and now - strikes[0] > cfg.ban_window:
+                    strikes.popleft()
+                if cfg.ban_after and len(strikes) >= cfg.ban_after:
+                    self._banned[client] = now + cfg.ban_seconds
+                    strikes.clear()
         self._log(incident)
         for alerter in self.alerters:
             try:
@@ -248,7 +341,65 @@ def is_multipart(content_type: str) -> bool:
     return "multipart/form-data" in (content_type or "").lower()
 
 
+REASONS_RU = {
+    "sqli": "попытка SQL-инъекции", "xss": "попытка внедрить скрипт (XSS)", "path_traversal": "попытка прочитать файлы сервера",
+    "command_injection": "попытка выполнить команду на сервере", "ssti": "попытка внедрения в шаблон",
+    "code_injection": "попытка выполнить код", "ssrf": "попытка обратиться к внутренним адресам",
+    "recon": "сканирование уязвимостей", "header_injection": "подмена заголовков", "xxe": "атака через XML",
+    "format_string": "атака через строку формата", "anomaly": "необычный запрос", "brute_force": "подбор пароля",
+    "rate_limit": "слишком много запросов", "virtual_patch": "обращение к закрытому адресу",
+}
+
+BLOCK_PAGE = """<!DOCTYPE html><html lang="ru"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Запрос остановлен</title>
+<body style="font:16px/1.55 system-ui,sans-serif;max-width:36em;margin:12vh auto;padding:0 1.2em;color:#1d2b24">
+<h1 style="font-size:26px;margin:0 0 .4em">Запрос остановлен защитой сайта</h1>
+<p>{reason_ru}. Если вы просто пользовались сайтом, напишите владельцу и назовите код: <b>{code}</b>.</p>
+<p style="color:#5b6b63;font-size:14px">This request was stopped by the site's protection ({reason}). Reference: {code}.</p>
+</body></html>"""
+
+
+SENSITIVE_NAME = re.compile(r"pass|pwd|secret|token|card|cvv|cvc|iin|ИИН|phone|tel|mail", re.I)
+CARD = re.compile(r"\b(?:\d[ -]?){13,19}\b")
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+PHONE = re.compile(r"(?:\+7|8)[\s(-]*\d{3}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}")
+
+
+def mask(name: str, value: str) -> str:
+    """What is kept of a payload: the attack, not the visitor's personal data.
+
+    Values of password, token, card, phone and e-mail fields are replaced; card numbers, e-mail
+    addresses and Kazakhstani phone numbers inside any other value are masked."""
+    if name and SENSITIVE_NAME.search(name):
+        return f"[{len(value)} символов скрыто]"
+    value = CARD.sub("[карта]", value)
+    value = EMAIL.sub("[email]", value)
+    return PHONE.sub("[телефон]", value)
+
+
+def block_response(verdict: Verdict, accept: str = "") -> tuple[str, bytes]:
+    """A page for browsers, JSON for everything else."""
+    if "text/html" not in (accept or "").lower():
+        return "application/json", block_body(verdict)
+    inc = verdict.incident
+    reason = "banned" if verdict.banned else ("error" if verdict.error else (inc.attack_type if inc else
+                                                                            (verdict.reason or "attack")))
+    if verdict.banned:
+        reason_ru = "Ваш адрес временно заблокирован после повторных подозрительных запросов"
+    elif verdict.error:
+        reason_ru = "Запрос не удалось проверить"
+    else:
+        reason_ru = REASONS_RU.get(reason, "подозрительный запрос").capitalize()
+    code = inc.id if inc else reason
+    import html
+    page = BLOCK_PAGE.format(reason_ru=html.escape(reason_ru), reason=html.escape(reason), code=html.escape(code))
+    return "text/html; charset=utf-8", page.encode("utf-8")
+
+
 def block_body(verdict: Verdict) -> bytes:
+    if verdict.reason and not verdict.incident:
+        payload = {"error": "blocked by Aegis", "reason": verdict.reason}
+        return json.dumps(payload).encode("utf-8")
     if verdict.banned:
         payload = {"error": "blocked by Aegis", "reason": "client temporarily banned after repeated attacks"}
     elif verdict.error:

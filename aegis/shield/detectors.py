@@ -38,6 +38,18 @@ _HS = r"[ \t]{0,20}"
 SIGNATURES: dict[str, list[tuple[str, re.Pattern, float]]] = {
     "sqli": [
         ("tautology", re.compile(r"['\"`)]\s*(or|and|\|\||&&)\s*['\"`(]?\s*[\w'\"]+\s*['\"`)]?\s*(=|like|<>|!=|<|>)\s*['\"`(]?\s*[\w'\"]+", _F), 0.9),
+        ("in-list tautology", re.compile(r"(['\"`)]|\A)[ \t]{0,20}(or|and)[ \t]{1,20}['\"]?\w{1,64}['\"]?[ \t]{1,20}in[ \t]{0,20}\("
+                                        r"[ \t]{0,20}['\"]?\w", _F), 0.9),
+        ("open-quote tautology", re.compile(r"\A[ \t]{0,20}(['\"][ \t]{0,20})?(or|and)[ \t]{1,20}n?(['\"])(\w{0,64})\3[ \t]{0,20}(=|like)"
+                                           r"[ \t]{0,20}n?\3\4(\3|[ \t]{0,20}\Z)", _F), 0.85),
+        ("dangling quote", re.compile(r"\w['\"][ \t]{0,20}(or|and)[ \t]{1,20}['\"][ \t]{0,20}\Z", _F), 0.85),
+        ("anchored comparison", re.compile(r"\A[ \t]{0,20}(['\")][ \t]{0,20})?(or|and)[ \t]{1,20}\d{1,12}[ \t]{0,20}(<=|>=|<>|!=|<|>|=)"
+                                          r"[ \t]{0,20}\d{1,12}[ \t]{0,20}(\Z|--|#|/\*|;)", _F), 0.85),
+        ("division by zero", re.compile(r"\b(isnull|ifnull|coalesce|nvl)[ \t]{0,10}\([ \t]{0,10}1[ \t]{0,10}/[ \t]{0,10}0[ \t]{0,10}\)", _F), 0.85),
+        ("function chain", re.compile(r"\b(?:elt|bin|ord|hex|char|chr|ascii|substr(?:ing)?|mid|concat(?:_ws)?|unhex|conv|cast|"
+                                      r"convert|length)[ \t]{0,5}\((?:[^a-z(]{0,40}\b(?:elt|bin|ord|hex|char|chr|ascii|"
+                                      r"substr(?:ing)?|mid|concat(?:_ws)?|unhex|conv|cast|convert|length)[ \t]{0,5}\(){2}", _F), 0.85),
+        ("exec variable", re.compile(r"\bexec(ute)?[ \t]{0,10}\([ \t]{0,10}@\w|\bselect[ \t]{1,10}@\w{1,64}[ \t]{1,10}(as|into|from)\b", _F), 0.9),
         ("boolean injection", re.compile(
             r"['\"`)]\s*(or|and|\|\|)\s+((not\s+)?(true|false|null)\b|\d+\s*($|--|#|/\*|\)|;))", _F), 0.9),
         ("numeric tautology", re.compile(r"\b(or|and)\s+(\d+)\s*=\s*\2\b", _F), 0.85),
@@ -58,7 +70,7 @@ SIGNATURES: dict[str, list[tuple[str, re.Pattern, float]]] = {
             r"['\"`]\s*\)*\s*;?\s*(delete\s+from|drop\s+(table|database)|insert\s+into|update\s+\w+\s+set|"
             r"select\s+[\w*@,\s()]+\s+from|exec(ute)?\s|waitfor\s+delay|shutdown\b)", _F), 0.9),
         ("self tautology", re.compile(r"\b(or|and)\s+(['\"]?)(\w+)\2\s*(=|like)\s*\2\3\2(?!\w)", _F), 0.85),
-        ("null test", re.compile(r"['\"`)]\s*(or|and)\s+\w+\s+is\s+(not\s+)?null\b", _F), 0.9),
+        ("null test", re.compile(r"['\"`)]\s*(or|and)\s+[\w.]+\s+is\s+(not\s+)?null\b", _F), 0.9),
         ("dangerous procedure", re.compile(r"\b(xp_cmdshell|sp_executesql|sp_oacreate|load_file\s*\(|into\s+(out|dump)file\b|"
                                            r"utl_http|dbms_pipe|exec(ute)?\s+immediate)", _F), 0.95),
         ("sql variable", re.compile(r"\bdeclare\s+@\w+|@@(version|servername|datadir|hostname|basedir|variable)\b", _F), 0.85),
@@ -90,7 +102,10 @@ SIGNATURES: dict[str, list[tuple[str, re.Pattern, float]]] = {
         ("null byte", re.compile(r"\x00"), 0.6),
         ("wrapper scheme", re.compile(r"^(file|php|zip|data|expect|phar)://", _F), 0.85),
         ("system path", re.compile(
-            r"^\s*(/(etc|proc|root|var/(log|adm|mail|spool|lib/mysql)|usr/local/etc|opt/lampp)/|[a-z]:\\\\?(windows|winnt|boot\.ini|inetpub)\b)", _F), 0.85),
+            r"^\s*(/(etc|proc|root|boot/grub|var/(log|adm|mail|spool|lib/mysql)|usr/local/(etc|apache\d?)|apache\d?/logs|"
+            r"opt/lampp)/|/\.(bash_profile|bashrc|cshrc|zshrc|profile|bash_history|mysql_history)\b|"
+            r"[a-z]:[\\/]{0,2}(windows|winnt|boot\.ini|inetpub|program files|appserv|xampp|wamp|system32|apache)\b)", _F), 0.85),
+        ("backslash dot-dot", re.compile(r"[/\\]\.\.[%/\\]", _F), 0.85),
         ("secret config file", re.compile(r"(^|[/\\])(\.htpasswd|\.htaccess|web\.config|wp-config\.php|\.bash_history|id_rsa|"
                                           r"shadow|master\.passwd|httpd\.conf|php\.ini|my\.cnf)\b", _F), 0.85),
         ("encoded dot-dot", re.compile(r"\.\.(%2f|%5c|2f|5c|%c0%af|%c1%9c)", _F), 0.85),
@@ -182,7 +197,29 @@ def _decode(value: str) -> str:
         out = decoded
     if "&" in out:
         out = html.unescape(out)
+    if "\\x" in out or "\\u00" in out:  # \x27UNION, \u003cscript (JS and PHP string escapes)
+        out = _ESCAPE.sub(lambda m: chr(int(m.group(1) or m.group(2), 16)), out)
     return out if out.isascii() else unicodedata.normalize("NFKC", out)  # fullwidth ＜script＞, small ﹨ ...
+
+
+_ESCAPE = re.compile(r"\\x([0-9a-fA-F]{2})|\\u00([0-9a-fA-F]{2})")
+_HEX_LITERAL = re.compile(r"\b0x([0-9a-fA-F]{16,512})\b")
+
+
+def _hex_text(value: str) -> list[str]:
+    """SQL hex literals decoded (0x77616974666f72... is `waitfor ...`), as ASCII or UTF-16LE."""
+    out = []
+    for m in _HEX_LITERAL.finditer(value):
+        digits = m.group(1)
+        if len(digits) % 2:
+            continue
+        raw = bytes.fromhex(digits)
+        if len(raw) >= 4 and raw[1::2].count(0) >= len(raw) // 2 - 1:
+            raw = raw[0::2]
+        text = raw.decode("latin-1")
+        if sum(32 <= ord(c) < 127 for c in text) >= 0.9 * len(text):
+            out.append(text)
+    return out
 
 
 def normalize(value: str) -> str:
@@ -202,6 +239,8 @@ def variants(value: str) -> set[str]:
     if "\\" in text:
         text = text.replace("\\x00", "\x00").replace("\\0", "\x00")
     out = {text, raw}
+    if "0x" in raw or "0X" in raw:
+        out.update(_hex_text(raw))
     if "\x00" in text or "\\0" in raw:
         out |= {text.replace("\x00", ""), raw.replace("\x00", "").replace("\\0", "")}
     return out
@@ -267,12 +306,20 @@ def reassembled(inputs: list[tuple[str, str, str]], relaxed: set[str]) -> list[t
 
 
 def analyze(inputs: list[tuple[str, str, str]], threshold: float = 0.8,
-            relaxed: set[str] | None = None, relaxed_threshold: float = 0.97) -> Detection | None:
-    """Return the strongest detection across all request inputs, if any crosses its threshold."""
+            relaxed: set[str] | None = None, relaxed_threshold: float = 0.97,
+            ignore: dict[str, frozenset[str]] | None = None) -> Detection | None:
+    """Return the strongest detection across all request inputs, if any crosses its threshold.
+
+    `ignore` maps a field name to attack classes that are normal content there (a site policy:
+    HTML in a WordPress post body written by a signed-in editor); "*" means every class."""
     relaxed = relaxed or set()
+    ignore = ignore or {}
     strongest: Detection | None = None
     for location, name, value in [*inputs, *reassembled(inputs, relaxed)]:
         if not value:
+            continue
+        skip = ignore.get(name) if location in ("query", "form", "json") else None
+        if skip and "*" in skip:
             continue
         if location == "header" and name.lower() == "user-agent" and SCANNER_AGENTS.search(value):
             det = Detection("recon", 0.95, ["scanner user-agent"], value, location, name)
@@ -288,6 +335,13 @@ def analyze(inputs: list[tuple[str, str, str]], threshold: float = 0.8,
                     continue
                 attack = max(classes, key=classes.get)
                 score, signals = classes[attack], [f"{attack} in {name}"]
+            if skip:
+                classes = {k: v for k, v in classes.items() if k not in skip}
+                if not classes:
+                    continue
+                if attack in skip:
+                    attack = max(classes, key=classes.get)
+                    score, signals = classes[attack], [f"{attack} in {name}"]
             if not attack:
                 continue
             det = Detection(attack, score, signals, value, location, name, classes)
