@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.aegis/
+shop.db
+aegis-demo-report.html
+aegis.sarif
+aegis-fixes.diff
+
+# personal notes, not for the public repo
+MAGZHAN_RU.md
+aegis-range/
+aegis-lab/
+.env
+*.env
