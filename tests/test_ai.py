@@ -203,7 +203,7 @@ def test_test_gate_runs_on_a_copy(tmp_path):
     path = tmp_path / "app.py"
     path.write_text(PICKLE_APP)
     probe = tmp_path / "test_probe.py"
-    probe.write_text("import pathlib\n\ndef test_probe():\n    assert 'json.loads' in pathlib.Path('app.py').read_text(encoding="utf-8")\n"
+    probe.write_text("import pathlib\n\ndef test_probe():\n    assert 'json.loads' in pathlib.Path('app.py').read_text(encoding='utf-8')\n"
                      "    pathlib.Path(__file__).with_name('RAN_IN').write_text(str(pathlib.Path.cwd()))\n")
     model = ScriptedModel(_reply(GOOD_FIX, ["import json"]))
     import sys
