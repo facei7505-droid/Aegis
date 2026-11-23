@@ -1,0 +1,146 @@
+laptop
+gaming laptop rtx 4060
+iPhone 15 Pro Max 256GB
+O'Brien Mug
+O'Reilly book
+D'Artagnan
+it's fine -- really
+don't stop me now
+Tom's Diner
+where is O'Hare airport?
+rock & roll
+fish & chips
+Q&A session
+R&D budget
+AT&T
+Johnson & Johnson
+cats; dogs; birds
+drop me a line; thanks!
+50% off; today only
+C# tutorial
+F# vs C#
+#hashtag
+#1 best seller
+<3 love it
+<b>bold</b> text in a bug report
+2 < 3 and 5 > 4
+price 1 OR 2
+1=1 is basic math
+2+2=4
+x = y + 1
+SELECT the best option
+Union Square cafe
+union station tickets
+select your size
+and/or
+a | b
+x & y & z
+50/50
+docs/readme.txt
+C:/Users/me/Documents
+images/2024/photo.jpg
+report-final-v2.pdf
+a@b.com
+magzhan.k@mail.kz
++7 701 123 45 67
+Москва
+Алматы, ул. Абая 10, кв. 5
+Шымкент
+Қазақстан Республикасы
+Привет! Как дела?
+Здравствуйте, хочу заказать доставку на завтра
+Сәлем, бағасы қанша?
+你好
+مرحبا
+https://example.com/page?id=5&sort=asc
+https://kaspi.kz/shop/p/12345
+www.google.com
+{"a": 1, "b": [1, 2]}
+[1, 2, 3]
+Hello {name}
+f(x) = x^2
+e = mc^2
+user_name
+first.last
+self-esteem
+ca$h money
+$5 off
+$100 bill
+100% cotton
+1,000 KZT
+12 000 ₸
+--verbose
+-rf
+rm -rf is dangerous, never run it
+Echo Dot speaker
+The sleep study
+sleep well
+time to drop the beat
+I said: "hi"
+she said 'hello'
+"quoted" text
+can't, won't, shouldn't
+Who's there?
+#include <stdio.h>
+print("hello world")
+for i in range(10): print(i)
+SELECT * FROM table is a SQL command (question in support form)
+How do I use a JOIN?
+My script prints errors; what should I do?
+cat pictures
+ls is a linux command
+ping me tomorrow
+curl is a nice tool
+python developer job
+Exec summary attached
+The ID is 12345
+id card number
+whoami — a philosophical question
+user@host:~$ ls
+1+1
+3*4
+(555) 123-4567
+Order #12345
+Ticket: ABC-123
+version 2.0.1
+null
+true
+false
+none
+N/A
+TBD
+password reset please
+Forgot my password :(
+https://youtube.com/watch?v=dQw4w9WgXcQ
+mailto:hello@example.com
+tel:+77011234567
+<3 <3 <3
+:) ;) :D
+¯\_(ツ)_/¯
+Pay 50% now & 50% later
+B&B near the lake
+P&G products
+Yes/No
+Either A or B
+Black & Decker drill
+Mac & Cheese
+Salt & Pepper
+Beauty & the Beast
+Smith & Wesson
+H&M jeans
+2024-11-23
+23.11.2026
+12:30 PM
+GMT+5
+Order (2 items) #4521
+Tried it; update: works now
+Hello,\nNet amount is 50 000 KZT
+Name | ID | Email
+Hi {{first_name}}, your order has shipped
+I like dogs; cat people too
+see you at 10; ping me
+Type: A; size: L
+He said "yes" and 2 people left
+(Select a size from the menu)
+Rated 4 or 5 stars
+Meet at 5; sleep early

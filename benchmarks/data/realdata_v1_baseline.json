@@ -1,0 +1,174 @@
+{
+ "csic_2010": {
+  "normal_training": {
+   "requests": 36000,
+   "flagged": 0,
+   "examples": [],
+   "median_us": 61.55950006814237,
+   "p99_us": 223.2000000503831
+  },
+  "normal_test": {
+   "requests": 36000,
+   "flagged": 0,
+   "examples": [],
+   "median_us": 61.52950004434388,
+   "p99_us": 205.40000002711167
+  },
+  "anomalous": {
+   "requests": 25065,
+   "flagged": 3990,
+   "by_category": {
+    "attack syntax in a value": [
+     3164,
+     5542
+    ],
+    "backup / config file probe": [
+     0,
+     5508
+    ],
+    "renamed parameter": [
+     0,
+     7038
+    ],
+    "unusual value, no attack syntax": [
+     826,
+     6977
+    ]
+   },
+   "classes": {
+    "sqli": 2314,
+    "xss": 1490,
+    "path_traversal": 186
+   }
+  }
+ },
+ "seclists_dev": {
+  "Generic-SQLi.txt": {
+   "class": "sqli",
+   "payloads": 268,
+   "detected": 127
+  },
+  "quick-SQLi.txt": {
+   "class": "sqli",
+   "payloads": 77,
+   "detected": 54
+  },
+  "sqli.auth.bypass.txt": {
+   "class": "sqli",
+   "payloads": 96,
+   "detected": 96
+  },
+  "Generic-BlindSQLi.fuzzdb.txt": {
+   "class": "sqli",
+   "payloads": 42,
+   "detected": 41
+  },
+  "SQLi-Polyglots.txt": {
+   "class": "sqli",
+   "payloads": 3,
+   "detected": 3
+  },
+  "MySQL-SQLi-Login-Bypass.fuzzdb.txt": {
+   "class": "sqli",
+   "payloads": 8,
+   "detected": 5
+  },
+  "XSS-Jhaddix.txt": {
+   "class": "xss",
+   "payloads": 110,
+   "detected": 102
+  },
+  "XSS-BruteLogic.txt": {
+   "class": "xss",
+   "payloads": 114,
+   "detected": 105
+  },
+  "XSS-Cheat-Sheet-PortSwigger.txt": {
+   "class": "xss",
+   "payloads": 6047,
+   "detected": 6047
+  },
+  "XSS-Polyglots.txt": {
+   "class": "xss",
+   "payloads": 14,
+   "detected": 14
+  },
+  "LFI-Jhaddix.txt": {
+   "class": "path_traversal",
+   "payloads": 930,
+   "detected": 264
+  },
+  "command-injection-commix.txt": {
+   "class": "command_injection",
+   "payloads": 8262,
+   "detected": 8262
+  },
+  "UnixAttacks.fuzzdb.txt": {
+   "class": "command_injection",
+   "payloads": 512,
+   "detected": 195
+  }
+ },
+ "seclists_heldout": {
+  "MSSQL.fuzzdb.txt": {
+   "class": "sqli",
+   "payloads": 17,
+   "detected": 7
+  },
+  "MySQL.fuzzdb.txt": {
+   "class": "sqli",
+   "payloads": 6,
+   "detected": 4
+  },
+  "Oracle.fuzzdb.txt": {
+   "class": "sqli",
+   "payloads": 55,
+   "detected": 51
+  },
+  "XSS-OFJAAAH.txt": {
+   "class": "xss",
+   "payloads": 2976,
+   "detected": 2345
+  },
+  "XSS-Bypass-Strings-BruteLogic.txt": {
+   "class": "xss",
+   "payloads": 17,
+   "detected": 1
+  },
+  "XSS-EnDe-evation.txt": {
+   "class": "xss",
+   "payloads": 207,
+   "detected": 53
+  },
+  "XSS-payloadbox.txt": {
+   "class": "xss",
+   "payloads": 2690,
+   "detected": 2105
+  },
+  "XSS-RSNAKE.txt": {
+   "class": "xss",
+   "payloads": 74,
+   "detected": 49
+  },
+  "xss-without-parentheses-semi-colons-portswigger.txt": {
+   "class": "xss",
+   "payloads": 8,
+   "detected": 8
+  },
+  "XSS-Somdev.txt": {
+   "class": "xss",
+   "payloads": 22,
+   "detected": 22
+  },
+  "LFI-LFISuite-pathtotest.txt": {
+   "class": "path_traversal",
+   "payloads": 569,
+   "detected": 356
+  },
+  "LFI-linux-and-windows_by-1N3@CrowdShield.txt": {
+   "class": "path_traversal",
+   "payloads": 1156,
+   "detected": 108
+  }
+ }
+}
