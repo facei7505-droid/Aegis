@@ -146,6 +146,8 @@ def test_gateway_heals_the_app_behind_it(tmp_path):
 
 
 def test_config_file(tmp_path):
+    import sys
+    pytest.importorskip("tomllib" if sys.version_info >= (3, 11) else "tomli")
     from aegis.gateway import load_specs
     cfg = tmp_path / "gw.toml"
     cfg.write_text('[[app]]\nname = "x"\nupstream = "http://127.0.0.1:9"\nhosts = ["x.localhost"]\nlisten = 8181\n'
