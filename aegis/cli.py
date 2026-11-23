@@ -330,6 +330,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     from .edge.cli import register as register_edge
     register_edge(sub)
+    ck = sub.add_parser("check", help="passive security check of a site (Russian report, for sales)")
+    ck.add_argument("target", help="domain or URL, e.g. shop.kz")
+    ck.add_argument("--json", action="store_true")
+    ck.add_argument("--pdf", default=None, help="also write a one-page PDF to send to the site owner")
+    ck.add_argument("--contact", default="", help="your contact for the PDF footer")
+    ck.add_argument("--timeout", type=float, default=12.0)
+    ck.set_defaults(func=lambda a: __import__("aegis.edge.check", fromlist=["main_check"]).main_check(a))
 
     r = sub.add_parser("rules", help="list rules")
     r.set_defaults(func=cmd_rules)

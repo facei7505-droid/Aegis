@@ -211,3 +211,10 @@ def test_origin_url_must_be_http():
     with pytest.raises(ValueError):
         Origin("ftp://example.kz")
     assert Proxy(Origin("https://203.0.113.5")).origin.port == 443
+
+
+def test_gateway_does_not_announce_itself(origin):
+    spec = AppSpec("shop", f"http://127.0.0.1:{origin}", ["shop.kz"], preserve_host=True, heal="off")
+    resp, _ = through(spec)
+    server = resp.getheader("Server") or ""
+    assert "WSGIServer" not in server and "CPython" not in server

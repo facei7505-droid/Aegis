@@ -25,7 +25,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
-from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
+from wsgiref.simple_server import ServerHandler, WSGIRequestHandler, WSGIServer, make_server
 
 from .canary import Canary, Recorded, TrafficRecorder
 from .healer import Healer
@@ -306,7 +306,27 @@ def _private(address: str) -> bool:
 
 # ------------------------------------------------------------------ server --
 
+class _QuietServerHandler(ServerHandler):
+    server_software = ""  # never announce "WSGIServer/0.2 CPython/3.x": the origin's own Server header passes
+
+
 class _Handler(WSGIRequestHandler):
+    server_version = "Aegis"
+    sys_version = ""
+
+    def handle(self):
+        """Same as wsgiref's, with a handler that does not add its own Server header."""
+        self.raw_requestline = self.rfile.readline(65537)
+        if len(self.raw_requestline) > 65536:
+            self.requestline = self.request_version = self.command = ""
+            self.send_error(414)
+            return
+        if not self.parse_request():
+            return
+        handler = _QuietServerHandler(self.rfile, self.wfile, self.get_stderr(), self.get_environ(), multithread=False)
+        handler.request_handler = self
+        handler.run(self.server.get_app())
+
     def get_environ(self):
         env = super().get_environ()
         env["RAW_URI"] = self.path  # forward the request target byte-for-byte
