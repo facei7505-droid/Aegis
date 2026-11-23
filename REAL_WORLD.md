@@ -12,7 +12,7 @@ false alarms. **The test half was never looked at while tuning.**
 | --- | --- | --- |
 | Normal, training (36,000) | 0 flagged | **0 flagged** |
 | Normal, test (36,000, held out) | 0 flagged | **0 flagged** |
-| Inspection time per request | | median 137 µs, p99 491 µs |
+| Inspection time per request | | median 138 µs, p99 527 µs |
 
 ## 2. CSIC 2010: 25,065 anomalous requests
 
@@ -31,6 +31,27 @@ the "now" column is not a held-out number.
 "Renamed parameter" and "unusual value" requests mostly carry no attack syntax (`idA=2` instead of
 `id=2`, a password that is merely odd). Catching those needs a model of the app's normal traffic, which
 is anomaly detection, not signatures. Aegis does not try, so it does not block real users for them either.
+
+## 2b. CSIC 2010 with a learned traffic profile
+
+Signatures only know attack syntax. With `learn=N` the shield also learns, per endpoint, which
+parameters arrive, which characters each one holds and how long it gets, then flags what is unusual
+(a positive security model). Here it learned the 36,000 requests of the **training** half and was then
+judged on the **test** half and on the anomalies, which it never saw.
+
+| | Signatures only | + learned profile | + strict paths |
+| --- | --- | --- | --- |
+| Normal test requests flagged (of 36,000) | 0 | **2** | **2** |
+| attack syntax in a value | 76.8% | **91.6%** | **91.6%** |
+| backup / config file probe | 45.0% | **45.0%** | **100.0%** |
+| renamed parameter | 0.0% | **100.0%** | **100.0%** |
+| unusual value, no attack syntax | 11.9% | **49.4%** | **49.4%** |
+| **All anomalous (25,065)** | 30.2% | **72.0%** | **84.1%** |
+
+CSIC is a closed, generated shop, which is the best case for a learned profile: every legitimate page and
+parameter shows up during learning. A real site changes, so the profile is per app, kept on disk, and
+relearned after deploys; password fields keep their relaxed threshold, and tracking parameters
+(`utm_*`, `fbclid`…) are ignored. `strict_paths` suits APIs and closed apps, not sites that add pages often.
 
 ## 3. SecLists payload lists used while tuning
 

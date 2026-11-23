@@ -147,6 +147,33 @@ def run_csic(root: Path) -> dict:
     return out
 
 
+def run_csic_profile(root: Path, strict: bool) -> dict:
+    """Learn the normal training half through the shield, then judge the held-out test half and the anomalies."""
+    from aegis.shield.core import ShieldConfig, ShieldCore
+
+    def requests(name):
+        for method, path, query, headers, body in parse_csic(root / name):
+            hdrs = {k.lower(): v for k, v in headers.items()}
+            yield method, path, ShieldCore.collect_inputs(path, query, hdrs, body, headers.get("Content-Type", ""))
+
+    training = list(requests("normalTrafficTraining.txt"))
+    c = ShieldCore(ShieldConfig(mode="block", ban_after=0, max_incidents=10, learn=len(training), strict_paths=strict))
+    for i, (method, path, inputs) in enumerate(training):
+        c.inspect(f"10.1.{i // 250 % 250}.{i % 250}", method, path, inputs)
+    flagged = sum(c.inspect("10.2.0.1", m, p, inp).blocked for m, p, inp in requests("normalTrafficTest.txt"))
+    label = categorise(root)
+    cats, hits = Counter(), Counter()
+    for i, (method, path, query, headers, body) in enumerate(parse_csic(root / "anomalousTrafficTest.txt")):
+        cat = label(path, query, body)
+        inputs = ShieldCore.collect_inputs(path, query, {k.lower(): v for k, v in headers.items()}, body,
+                                           headers.get("Content-Type", ""))
+        cats[cat] += 1
+        hits[cat] += c.inspect(f"10.3.{i // 250 % 250}.{i % 250}", method, path, inputs).blocked
+    return {"normal_test_flagged": flagged, "normal_test": 36000, "endpoints": len(c.profile.endpoints),
+            "by_category": {k: [hits[k], cats[k]] for k in CATEGORY_ORDER},
+            "flagged": sum(hits.values()), "requests": sum(cats.values())}
+
+
 HELDOUT = {
     "sqli": ["Fuzzing/Databases/SQLi/MSSQL.fuzzdb.txt", "Fuzzing/Databases/SQLi/MySQL.fuzzdb.txt",
              "Fuzzing/Databases/SQLi/Oracle.fuzzdb.txt"],
@@ -208,6 +235,26 @@ def markdown(result: dict, baseline: dict) -> str:
               "\"Renamed parameter\" and \"unusual value\" requests mostly carry no attack syntax (`idA=2` instead of",
               "`id=2`, a password that is merely odd). Catching those needs a model of the app's normal traffic, which",
               "is anomaly detection, not signatures. Aegis does not try, so it does not block real users for them either.", ""]
+    prof = result.get("csic_profile")
+    if prof:
+        d, st = prof["default"], prof["strict_paths"]
+        L += ["## 2b. CSIC 2010 with a learned traffic profile", "",
+              "Signatures only know attack syntax. With `learn=N` the shield also learns, per endpoint, which",
+              "parameters arrive, which characters each one holds and how long it gets, then flags what is unusual",
+              "(a positive security model). Here it learned the 36,000 requests of the **training** half and was then",
+              "judged on the **test** half and on the anomalies, which it never saw.", "",
+              "| | Signatures only | + learned profile | + strict paths |", "| --- | --- | --- | --- |",
+              f"| Normal test requests flagged (of 36,000) | {csic['normal_test']['flagged']} | "
+              f"**{d['normal_test_flagged']}** | **{st['normal_test_flagged']}** |"]
+        for cat in CATEGORY_ORDER:
+            L.append(f"| {cat} | {pct(*csic['anomalous']['by_category'][cat])} | **{pct(*d['by_category'][cat])}** | "
+                     f"**{pct(*st['by_category'][cat])}** |")
+        L += [f"| **All anomalous (25,065)** | {pct(csic['anomalous']['flagged'], csic['anomalous']['requests'])} | "
+              f"**{pct(d['flagged'], d['requests'])}** | **{pct(st['flagged'], st['requests'])}** |", "",
+              "CSIC is a closed, generated shop, which is the best case for a learned profile: every legitimate page and",
+              "parameter shows up during learning. A real site changes, so the profile is per app, kept on disk, and",
+              "relearned after deploys; password fields keep their relaxed threshold, and tracking parameters",
+              "(`utm_*`, `fbclid`…) are ignored. `strict_paths` suits APIs and closed apps, not sites that add pages often.", ""]
     for key, title, note in (("seclists_dev", "## 3. SecLists payload lists used while tuning",
                               "Misses in these lists were studied, so these numbers are an upper bound."),
                              ("seclists_heldout", "## 4. SecLists payload lists held out",
@@ -242,6 +289,8 @@ def main() -> None:
     result = {}
     if args.csic:
         result["csic_2010"] = run_csic(args.csic)
+        result["csic_profile"] = {"default": run_csic_profile(args.csic, False),
+                                  "strict_paths": run_csic_profile(args.csic, True)}
     if args.seclists:
         result["seclists_dev"] = run_lists(args.seclists, SECLISTS)
         result["seclists_heldout"] = run_lists(args.seclists, HELDOUT)

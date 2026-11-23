@@ -41,6 +41,9 @@ class ShieldConfig:
     max_upload: int = 100 * 1024 * 1024  # multipart forms are inspected in full up to this size
     fail_open: bool = True              # on an internal shield error: serve (True) or refuse (False) the request
     max_incidents: int = 1000           # incidents kept in memory (the log file keeps all)
+    learn: int = 0                      # learn this many clean requests, then flag what is unusual (0 = off)
+    profile_path: str | None = None     # keep the learned traffic profile here (JSON) across restarts
+    strict_paths: bool = False          # once learned, also flag paths never seen (good for closed apps and APIs)
 
 
 @dataclass
@@ -63,6 +66,45 @@ class ShieldCore:
         self._strikes: dict[str, deque] = defaultdict(deque)
         self._banned: dict[str, float] = {}
         self._lock = threading.Lock()
+        self.profile = None
+        if self.config.learn or self.config.profile_path:
+            from .profile import TrafficProfile
+            path = self.config.profile_path
+            if path and Path(path).is_file():
+                self.profile = TrafficProfile.load(path)
+            else:
+                self.profile = TrafficProfile(strict_paths=self.config.strict_paths)
+
+    @property
+    def learning(self) -> bool:
+        return self.profile is not None and self.profile.learned < self.config.learn
+
+    def profile_state(self) -> dict | None:
+        if self.profile is None:
+            return None
+        return {"mode": "learning" if self.learning else "enforcing", "learned": self.profile.learned,
+                "target": self.config.learn, "endpoints": len(self.profile.endpoints)}
+
+    def _profile(self, path: str, inputs) -> Detection | None:
+        """Learn from clean traffic until the target is reached, then flag what is unusual."""
+        cfg = self.config
+        if self.learning:
+            self.profile.learn(path, inputs)
+            done = self.profile.learned
+            if cfg.profile_path and (done % 500 == 0 or done == cfg.learn):
+                try:
+                    self.profile.save(cfg.profile_path)
+                except OSError:
+                    pass
+            return None
+        found = self.profile.check(path, inputs)
+        if found is None:
+            return None
+        limit = cfg.relaxed_threshold if found.param.lower() in cfg.relaxed_params else cfg.threshold
+        if found.score < limit:
+            return None
+        return Detection("anomaly", found.score, found.reasons, found.value, found.location, found.param,
+                         {"anomaly": found.score})
 
     # ------------------------------------------------------------- inputs --
     @staticmethod
@@ -117,6 +159,8 @@ class ShieldCore:
         if det is None and oversized and cfg.block_oversized:
             det = Detection("oversized_body", 0.9, ["body larger than the inspection limit"],
                             "", "body", "body", {"oversized_body": 0.9})
+        if det is None and self.profile is not None:
+            det = self._profile(path, inputs)
         detect_ms = (time.perf_counter() - t0) * 1000
         if det is None:
             return Verdict(False)
