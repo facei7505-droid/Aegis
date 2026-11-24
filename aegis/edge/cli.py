@@ -182,8 +182,11 @@ def run(args) -> int:
     if cmd == "serve":
         edge = Edge(home)
         edge.start(args.port, args.host)
+        from ..shield import libinjection
         print(f"Aegis Edge: {len(edge.sites)} сайт(ов), http://{args.host}:{args.port}"
-              + (", Telegram включён" if edge.bot else ""), flush=True)
+              + (", Telegram включён" if edge.bot else "")
+              + (", libinjection включён" if libinjection.available() else
+                 ", только сигнатуры (aegis build-engine добавит libinjection)"), flush=True)
         try:
             while True:
                 time.sleep(3600)

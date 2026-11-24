@@ -15,6 +15,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from urllib.parse import unquote_plus
 
+from . import libinjection
+
 _F = re.IGNORECASE | re.DOTALL
 
 # Shell commands that are not English words: dangerous after any separator.
@@ -76,7 +78,14 @@ SIGNATURES: dict[str, list[tuple[str, re.Pattern, float]]] = {
         ("sql variable", re.compile(r"\bdeclare\s+@\w+|@@(version|servername|datadir|hostname|basedir|variable)\b", _F), 0.85),
         ("char encoding", re.compile(r"\b(char|chr|nchar)\s*\(\s*\d+(\s*,\s*\d+){2,}\s*\)|\b0x[0-9a-f]{16,}\b", _F), 0.6),
         ("like probe", re.compile(r"\b(or|and)\s+\w+\s+like\s+", _F), 0.6),
-        ("schema probe", re.compile(r"\b(information_schema|sqlite_master|pg_catalog|sysobjects)\b", _F), 0.8),
+        ("schema probe", re.compile(r"\b(information_schema|sqlite_master|pg_catalog|sysobjects|syscolumns|sysusers|"
+                                    r"syscomments|msysobjects|all_tab_columns|user_tables|mysql\.user)\b", _F), 0.8),
+        ("having tautology", re.compile(r"\bhaving[ \t]{1,20}(\d{1,9})[ \t]{0,20}=[ \t]{0,20}\1\b", _F), 0.85),
+        ("anchored string comparison", re.compile(r"\A[ \t]{0,20}(or|and)[ \t]{1,20}'[^'\n]{0,64}'[ \t]{0,20}"
+                                                  r"(=|<>|!=|<|>|like)[ \t]{0,20}'", _F), 0.85),
+        ("anchored comment", re.compile(r"\A[ \t]{0,20}(or|and)[ \t]{1,20}\d{1,12}[ \t]{0,20}(--|#)", _F), 0.85),
+        ("between tautology", re.compile(r"\b(or|and)[ \t]{1,20}(\d{1,9})[ \t]{1,20}between[ \t]{1,20}\d{1,9}"
+                                         r"[ \t]{1,20}and[ \t]{1,20}\d{1,9}\b", _F), 0.85),
     ],
     "xss": [
         ("script tag", re.compile(r"<\s*script\b", _F), 0.95),
@@ -281,7 +290,37 @@ def score_all(value: str) -> tuple[str, float, list[str], dict[str, float]]:
         classes[attack] = score
         if score > best[1]:
             best = (attack, score, [name for name, _ in hits])
+    if libinjection.available():
+        best = _second_opinion(texts, classes, best)
     return best[0], best[1], best[2], classes
+
+
+LIBINJECTION_WEIGHT = 0.9
+ARITHMETIC_WEIGHT = 0.6  # fingerprints of numbers and logic alone ("2 < 3 and 5 > 4" is 1&1, like "1 and 1=1"):
+ARITHMETIC = set("1&o()")  # they block only together with a signature
+
+
+_PLAIN = re.compile(r"[\w.@-]*")  # one bare token: nothing for a SQL or HTML tokenizer to find
+
+
+def _second_opinion(texts, classes: dict[str, float], best: tuple[str, float, list[str]]):
+    """libinjection's verdict joins the signature score as one more independent signal."""
+    texts = [t for t in texts if not _PLAIN.fullmatch(t)]
+    if not texts:
+        return best
+    sqli = next((fp for ok, fp in (libinjection.is_sqli(t) for t in texts) if ok), None)
+    xss = any(libinjection.is_xss(t) for t in texts)
+    for attack, hit, signal in (("sqli", sqli is not None, f"libinjection sqli {sqli}"),
+                                ("xss", xss, "libinjection xss")):
+        if not hit:
+            continue
+        weight = ARITHMETIC_WEIGHT if attack == "sqli" and set(sqli) <= ARITHMETIC else LIBINJECTION_WEIGHT
+        score = round(1.0 - (1.0 - classes.get(attack, 0.0)) * (1.0 - weight), 3)
+        classes[attack] = score
+        signals = (best[2] + [signal]) if best[0] == attack else [signal]
+        if score > best[1] or best[0] == attack:
+            best = (attack, max(score, best[1]), signals)
+    return best
 
 
 REASSEMBLED = {"query", "form"}

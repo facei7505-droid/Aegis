@@ -244,6 +244,27 @@ def cmd_rules(args) -> int:
     return EXIT_OK
 
 
+def cmd_build_engine(args) -> int:
+    from .shield import libinjection
+    if args.check:
+        if libinjection.available():
+            print(f"libinjection: on ({libinjection.ENGINE.path})")
+            return EXIT_OK
+        print("libinjection: off, signatures only (run: aegis build-engine)")
+        return EXIT_FINDINGS
+    try:
+        path = libinjection.build(Path(args.output) if args.output else None, args.cc)
+    except RuntimeError as exc:
+        print(f"aegis build-engine: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    if not libinjection.available():
+        print(f"aegis build-engine: built {path} but could not load it", file=sys.stderr)
+        return EXIT_ERROR
+    sqli, fingerprint = libinjection.is_sqli("1' or '1'='1")
+    print(f"libinjection built: {path} (self-test: {'ok' if sqli else 'FAILED'}, fingerprint {fingerprint})")
+    return EXIT_OK if sqli else EXIT_ERROR
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="aegis", description="Self-healing application security.")
     p.add_argument("--version", action="version", version=f"aegis {__version__}")
@@ -337,6 +358,12 @@ def build_parser() -> argparse.ArgumentParser:
     ck.add_argument("--contact", default="", help="your contact for the PDF footer")
     ck.add_argument("--timeout", type=float, default=12.0)
     ck.set_defaults(func=lambda a: __import__("aegis.edge.check", fromlist=["main_check"]).main_check(a))
+
+    be = sub.add_parser("build-engine", help="compile libinjection, the second SQLi/XSS detector (needs a C compiler)")
+    be.add_argument("--output", help="where to put the library (default: next to the sources, or ~/.cache/aegis)")
+    be.add_argument("--cc", help="C compiler to use (default: $CC, cc, gcc or clang)")
+    be.add_argument("--check", action="store_true", help="only report whether the engine is loaded")
+    be.set_defaults(func=cmd_build_engine)
 
     r = sub.add_parser("rules", help="list rules")
     r.set_defaults(func=cmd_rules)
