@@ -26,6 +26,17 @@ STATIC = re.compile(r"\.(?:css|js|mjs|map|png|jpe?g|gif|webp|avif|svg|ico|bmp|wo
 SCRIPT_IN_PATH = re.compile(r"\.(?:php\d?|phtml|asp|aspx|jsp|cgi|pl)(?:/|$)", re.I)  # /wp-login.php/x.css runs PHP
 
 
+def php_name(name: str) -> str:
+    """The name PHP files a request field under: leading spaces dropped, `.` and ` ` become `_`, and with no
+    closing `]` every `[` does too (`user.id` and `user[id` both arrive as $_GET['user_id']). Rules keyed
+    on field names must see that name, or a renamed field walks past them."""
+    name = name.lstrip(" ")
+    first = name.find("[")
+    if first != -1 and "]" in name[first + 1:]:  # an array: its base name is renamed, the keys are not
+        return name[:first].replace(".", "_").replace(" ", "_") + name[first:]
+    return name.replace(".", "_").replace(" ", "_").replace("[", "_")
+
+
 def is_static(path: str) -> bool:
     return bool(STATIC.search(path)) and not SCRIPT_IN_PATH.search(path)
 PASSWORD_FIELDS = {"password", "pass", "pwd", "passwd", "user_password", "login_password", "password[]",
@@ -119,14 +130,18 @@ class Request:
     editor: bool | None = None         # signed editor pass verified (None: the site has no connector)
 
     @classmethod
-    def build(cls, method: str, path: str, inputs: list[tuple[str, str, str]]) -> "Request":
+    def build(cls, method: str, path: str, inputs: list[tuple[str, str, str]], last: bool = False) -> "Request":
+        """`last`: a repeated field means its last value, as PHP reads it (Python frameworks read the first)."""
         params: dict[str, str] = {}
         cookies: set[str] = set()
         texts: list[str] = []
         budget = 64 * 1024
         for location, name, value in inputs:
             if location in ("query", "form", "json", "multipart"):
-                params.setdefault(name, value)
+                if last:
+                    params[name] = value
+                else:
+                    params.setdefault(name, value)
             elif location == "cookie":
                 cookies.add(name)
             if location in ("form", "json", "body") and budget > 0:

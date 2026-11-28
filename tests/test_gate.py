@@ -42,8 +42,18 @@ def test_challenge_pass_and_binding():
     token = gate.issue_pass("203.0.113.5", ENV, now=1_000_000)
     env = {**ENV, "HTTP_COOKIE": f"a=1; aegis_pass={token}"}
     assert gate.has_pass("203.0.113.5", env, now=1_000_000 + 3600)
-    assert not gate.has_pass("203.0.113.5", env, now=1_000_000 + 13 * 3600)   # 12 hours
+    assert not gate.has_pass("203.0.113.5", env, now=1_000_000 + 3 * 3600)    # two hours
     assert not gate.has_pass("198.51.100.1", env, now=1_000_000)
+
+
+def test_a_pass_covers_a_budget_of_pages():
+    """A bot that solved once does not get to hammer the site for hours: after PASS_PAGES it solves again."""
+    from aegis.shield.gate import PASS_PAGES
+    gate = Gate("s" * 64, bits=8)
+    env = {**ENV, "HTTP_COOKIE": f"aegis_pass={gate.issue_pass('203.0.113.5', ENV)}"}
+    assert all(gate.has_pass("203.0.113.5", env, count=True) for _ in range(PASS_PAGES))
+    assert not gate.has_pass("203.0.113.5", env, count=True)
+    assert gate.has_pass("203.0.113.5", env)                                 # static files: not counted
 
 
 @pytest.mark.parametrize("preset, path, query, exempt", [
@@ -51,7 +61,9 @@ def test_challenge_pass_and_binding():
     ("bitrix", "/bitrix/admin/1c_exchange.php", "type=sale", True),
     ("wordpress", "/", "wc-api=kaspi", True),
     ("generic", "/api/orders", "", True),
-    ("generic", "/static/app.css", "", True),
+    ("generic", "/static/app.css", "", False),        # a CMS may answer /any/x.css with a dynamic page
+    ("opencart", "/index.php", "route=extension/payment/x&route=product/search&search=a", False),  # PHP reads the last
+    ("opencart", "/index.php", "route=extension/payment/kaspi/callback", True),
     ("generic", "/catalog/", "", False),
     ("bitrix", "/bitrix/tools/../admin/", "", False),
 ])

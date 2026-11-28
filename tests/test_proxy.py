@@ -252,3 +252,10 @@ def test_origin_lock_signs_requests_and_keeps_the_connector_answer_inside(origin
     assert verify_origin("s" * 64, seen["x-aegis-auth"], "shop.kz", "203.0.113.9", "GET", "/connector")
     assert seen["x-real-ip"] == "203.0.113.9"
     assert resp.getheader("X-Aegis-Connector") is None
+
+
+def test_trace_and_connect_are_refused(origin):
+    spec = AppSpec("shop", f"http://127.0.0.1:{origin}", ["shop.kz"], preserve_host=True, heal="off")
+    for method in ("TRACE", "TRACK", "CONNECT"):
+        resp, _ = through(spec, method=method, path="/")
+        assert resp.status == 405

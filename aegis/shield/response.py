@@ -184,14 +184,18 @@ def examine(text: str, request_fields: dict[str, str], target: str = "") -> Find
     return None
 
 
-def request_fields(target: str, body: bytes | None, content_type: str) -> dict[str, str]:
-    fields = dict(parse_qsl(target.split("?", 1)[1], keep_blank_values=True)) if "?" in target else {}
+def request_fields(target: str, body: bytes | None, content_type: str, php: bool = False) -> dict[str, str]:
+    """Field -> value as the application reads it (`php`: PHP's names, last value wins)."""
+    pairs = parse_qsl(target.split("?", 1)[1], keep_blank_values=True) if "?" in target else []
     if body and "application/x-www-form-urlencoded" in (content_type or ""):
         try:
-            fields.update(parse_qsl(body[:65536].decode("utf-8", errors="replace"), keep_blank_values=True))
+            pairs += parse_qsl(body[:65536].decode("utf-8", errors="replace"), keep_blank_values=True)
         except ValueError:
             pass
-    return fields
+    if php:
+        from .policy import php_name
+        pairs = [(php_name(k), v) for k, v in pairs]
+    return dict(pairs)
 
 
 # ------------------------------------------------------- learned patches --

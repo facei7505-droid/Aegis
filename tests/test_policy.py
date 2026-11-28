@@ -151,12 +151,20 @@ def test_generic_logins_count_any_password_form():
     assert results[3] == 429
 
 
-def test_rate_limit_counts_pages_not_files(monkeypatch):
+def test_rate_limit_counts_pages_fully_and_files_a_quarter(monkeypatch):
     monkeypatch.setattr(core_mod.time, "time", lambda: 2_000_000.0)
     core = shield(preset="generic", rate_limit=20)
-    assert not any(check(core, "GET", f"/static/app.{i}.js").blocked for i in range(100))
-    pages = [check(core, "GET", f"/catalog?page={i}") for i in range(25)]
-    assert [v.blocked for v in pages].index(True) == 20 and pages[20].status == 429 and pages[20].retry_after > 0
+    assert not any(check(core, "GET", f"/static/app.{i}.js").blocked for i in range(40))   # 40 files = 10 pages
+    pages = [check(core, "GET", f"/catalog?page={i}") for i in range(15)]
+    assert [v.blocked for v in pages].index(True) == 10 and pages[10].status == 429 and pages[10].retry_after > 0
+
+
+def test_a_flood_of_fake_files_is_still_a_flood(monkeypatch):
+    """A CMS answers /any/x.css with a full dynamic 404: such requests must not be free."""
+    monkeypatch.setattr(core_mod.time, "time", lambda: 2_000_000.0)
+    core = shield(preset="wordpress", rate_limit=300)
+    verdicts = [check(core, "GET", f"/p{i}.css") for i in range(1300)]
+    assert verdicts[1199].blocked is False and verdicts[1200].status == 429
 
 
 def test_monitor_mode_records_limits_without_blocking():
@@ -281,3 +289,29 @@ def test_forwarded_for_is_only_trusted_from_our_proxies():
     assert core.client_ip("127.0.0.1", "203.0.113.9:443") == "127.0.0.1"
     assert ShieldCore(ShieldConfig(trust_proxy=True, trusted_proxies=("192.0.2.0/24",))).client_ip(
         "127.0.0.1", "203.0.113.9") == "127.0.0.1"
+
+
+# ------------------------------------------------------- PHP field names --
+
+def test_php_field_names():
+    from aegis.shield.policy import php_name
+    assert php_name("user.id") == php_name("user[id") == php_name(" user id") == "user_id"
+    assert php_name("a.b[c.d") == "a_b_c_d"
+    assert php_name("user[id]") == "user[id]" and php_name("a.b[c]") == "a_b[c]"
+
+
+def test_renamed_field_cannot_walk_past_a_learned_injection_point():
+    """PHP reads user.id and user[id as user_id: the closed field stays closed under every spelling."""
+    core = shield(preset="generic")
+    core.learned.learn("/profile", "user_id", "5'", "You have an error in your SQL syntax")
+    for name in ("user_id", "user.id", "user[id", "user id"):
+        assert check(core, "GET", f"/profile?{name}=5%20rlike%205").blocked, name
+    assert not check(core, "GET", "/profile?user_id=7").blocked
+
+
+def test_php_reads_the_last_of_repeated_fields():
+    """OpenCart's admin trust is keyed on route: a second route= must not borrow the first one's rules."""
+    from aegis.shield.policy import Request
+    inputs = [("query", "route", "catalog/product"), ("query", "route", "tool/backup")]
+    assert Request.build("GET", "/admin/index.php", inputs).params["route"] == "catalog/product"
+    assert Request.build("GET", "/admin/index.php", inputs, last=True).params["route"] == "tool/backup"

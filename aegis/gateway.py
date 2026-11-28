@@ -34,7 +34,7 @@ from .models import Incident
 from .proxy import Origin, Proxy
 from .shield import AegisShield, ShieldConfig
 from .shield.core import ShieldCore
-from .shield.gate import Gate
+from .shield.gate import DEFAULT_BITS, Gate
 from .shield.policy import is_static, normalize_path
 from .shield.immunity import SharedBans
 
@@ -58,6 +58,8 @@ class AppSpec:
     sni: str | None = None                 # SNI / certificate name for the origin; default: the public Host
     origin_secret: str | None = None       # origin lock: sign forwarded requests (shield/signing.py)
 
+
+REFUSED_METHODS = {"TRACE", "TRACK", "CONNECT", "DEBUG"}
 
 # ------------------------------------------------------------------ proxy --
 
@@ -97,7 +99,7 @@ class ResponseGuard:
         text = decode(data, encoding)
         if not text:
             return None
-        fields = request_fields(target, body, headers.get("Content-Type", ""))
+        fields = request_fields(target, body, headers.get("Content-Type", ""), php=bool(self.core.config.preset))
         finding = examine(text, fields, target)
         if finding is None:
             return None
@@ -279,6 +281,11 @@ class Gateway:
     def __call__(self, environ, start_response):
         host = environ.get("HTTP_HOST", "").split(":")[0].lower()
         path = environ.get("PATH_INFO", "/")
+        if environ.get("REQUEST_METHOD", "GET").upper() in REFUSED_METHODS:
+            # TRACE echoes the request back (cookies included); CONNECT would make a proxy of the site.
+            start_response("405 Method Not Allowed", [("Allow", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS"),
+                                                      ("Content-Length", "0"), ("Cache-Control", "no-store")])
+            return [b""]
         if path in ("/_aegis/tls-ask", "/_aegis/health") and host not in self.by_host \
                 and _private(environ.get("REMOTE_ADDR", "")):
             return self._service(path, environ, start_response)
@@ -329,7 +336,7 @@ class Gateway:
             # Derived from the site's secret, so passes survive a restart; random for apps without one.
             secret = (hmac.new(spec.origin_secret.encode(), f"gate|{name}".encode(), "sha256").hexdigest()
                       if spec.origin_secret else None)
-            self.gates[name] = Gate(secret, bits=int(spec.options.get("siege_bits", 16)),
+            self.gates[name] = Gate(secret, bits=int(spec.options.get("siege_bits", DEFAULT_BITS)),
                                     preset=spec.options.get("preset"),
                                     exempt=spec.options.get("siege_exempt", ()))
         was = self.siege_active(name)

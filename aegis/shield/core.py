@@ -22,6 +22,7 @@ from .detectors import Detection, analyze
 
 MAX_BODY = 1024 * 1024
 RELAXED_PARAMS = {"password", "passwd", "pwd", "pass", "new_password", "current_password", "csrf_token", "token"}
+PHP_NAMED = ("query", "form", "multipart", "cookie")  # PHP renames these fields; JSON keys stay as sent
 SCANNED_HEADERS = {"user-agent", "referer", "x-forwarded-host", "x-original-url", "x-rewrite-url"}
 
 
@@ -50,7 +51,7 @@ class ShieldConfig:
     profile_path: str | None = None     # keep the learned traffic profile here (JSON) across restarts
     strict_paths: bool = False          # once learned, also flag paths never seen (good for closed apps and APIs)
     preset: str | None = None           # site policy: generic | wordpress | bitrix | opencart (see policy.py)
-    rate_limit: int = 0                 # page requests per minute per client (static files not counted; 0 = off)
+    rate_limit: int = 0                 # page requests per minute per client (a static file counts 1/4; 0 = off)
     login_limit: int = 0                # login attempts per client inside login_window (0 = off)
     login_window: float = 600.0
     login_lockout: float = 1800.0       # login is refused this long; the rest of the site stays open
@@ -192,9 +193,12 @@ class ShieldCore:
 
         t0 = time.perf_counter()
         req = None
+        if cfg.preset:  # a PHP site: judge fields under the names PHP gives them
+            from .policy import php_name
+            inputs = [(loc, php_name(n) if loc in PHP_NAMED else n, v) for loc, n, v in inputs]
         if self.policy is not None or cfg.rate_limit or cfg.login_limit:
             from .policy import Request, is_static
-            req = Request.build(method, path, inputs)
+            req = Request.build(method, path, inputs, last=bool(cfg.preset))
             if cfg.editor_secret:
                 from .signing import EDITOR_COOKIE, verify_editor
                 value = next((v for loc, n, v in inputs if loc == "cookie" and n == EDITOR_COOKIE), "")
@@ -232,18 +236,24 @@ class ShieldCore:
         """Login lockouts and request-rate limits. Both answer 429 and never ban the whole address."""
         cfg = self.config
         block = cfg.mode == "block"
-        if cfg.rate_limit and not static(req.route):
+        if cfg.rate_limit:
+            # Static files count a quarter: a page pulls in dozens of them, but a flood of /any/x.css (which a
+            # CMS answers with a full dynamic 404) must not be free.
+            weight = 0.25 if static(req.route) else 1.0
             with self._lock:
                 window = self._rate.get(client)
                 if window is None or now - window[0] >= 60:
                     if len(self._rate) > 50_000:
                         self._rate = {k: v for k, v in self._rate.items() if now - v[0] < 60}
-                    window = self._rate[client] = [now, 0]
-                window[1] += 1
+                    window = self._rate[client] = [now, 0.0, False]
+                window[1] += weight
                 count, started = window[1], window[0]
+                first = count > cfg.rate_limit and not window[2]
+                if first:
+                    window[2] = True
             if count > cfg.rate_limit:
                 retry = max(1, int(60 - (now - started)))
-                if count == cfg.rate_limit + 1:  # one incident per window, not one per request
+                if first:  # one incident per window, not one per request
                     det = Detection("rate_limit", 1.0, [f"more than {cfg.rate_limit} page requests a minute"],
                                     req.route, "path", "rate", {"rate_limit": 1.0})
                     verdict = self._incident(det, client, req.method, req.path, now, 0.0, strike=False)

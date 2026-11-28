@@ -1,18 +1,21 @@
 """Siege mode: a proof-of-work gate in front of a site under a bot flood (the idea of Anubis, by Xe Iaso).
 
 When a site is under siege, a visitor without a pass gets a small page whose script finds a number
-`n` such that SHA-256(challenge + n) starts with `bits` zero bits (2^16 tries on average: a second
-or two on a phone). The answer earns a signed cookie for 12 hours. A person waits once; a bot that
-wants a thousand pages a second pays a thousand seconds of CPU, and bots that do not run JavaScript
-never get through at all.
+`n` such that SHA-256(challenge + n) starts with `bits` zero bits (2^18 tries on average: under a
+second on a laptop, a second or two on a phone). The answer earns a signed cookie for two hours and
+PASS_PAGES page views; then the browser solves again, invisibly short. Bots that do not run JavaScript
+never get through. Honest limit: a bot with native SHA-256 solves in tens of milliseconds, so the gate
+taxes a determined attacker rather than stopping one; rate limits and bans still apply behind it.
 
 Nothing is stored: the challenge is an HMAC of the visitor's address, browser and a five-minute
 window, and the pass is an HMAC too.
 
-Never gated: static files (the page must still render), the gate's own URL, and paths that are
-server-to-server by nature: payment callbacks, 1C exchange, cron, REST/webhooks (per CMS preset,
-plus the site's own list). Search engine crawlers get 503 + Retry-After: "come back later", which
-does not hurt rankings during a short siege.
+Never gated: the gate's own URL and paths that are server-to-server by nature: payment callbacks,
+1C exchange, cron, REST/webhooks (per CMS preset, plus the site's own list), matched only on
+requests without repeated query fields (PHP reads the last `route=`, so a second one must not ride
+on an exempt first). Files that look static are not exempt (a CMS answers /any/page.css with a full
+dynamic 404): without a pass they get a short 503. Search engine crawlers get 503 + Retry-After:
+"come back later", which does not hurt rankings during a short siege.
 """
 from __future__ import annotations
 
@@ -22,14 +25,17 @@ import json
 import re
 import secrets
 import time
-from urllib.parse import parse_qs, quote
+import threading
+from urllib.parse import parse_qs, quote, unquote_plus
 
-from .policy import is_static, normalize_path
+from .policy import is_static, normalize_path, php_name
 
 GATE_PATH = "/_aegis/gate"
 PASS_COOKIE = "aegis_pass"
 WINDOW = 300
-PASS_SECONDS = 12 * 3600
+PASS_SECONDS = 2 * 3600
+PASS_PAGES = 300  # page views per pass, then the browser solves again
+DEFAULT_BITS = 18
 
 END = r"(?=$|\?)"  # end of the path, with or without a query
 EXEMPT = {
@@ -53,13 +59,15 @@ def leading_zero_bits(digest: bytes) -> int:
 
 
 class Gate:
-    def __init__(self, secret: str | None = None, bits: int = 16, preset: str | None = None,
+    def __init__(self, secret: str | None = None, bits: int = DEFAULT_BITS, preset: str | None = None,
                  exempt: list[str] | tuple[str, ...] = ()):
         self.secret = secret or secrets.token_hex(32)
         self.bits = bits
         patterns = EXEMPT["generic"] + EXEMPT.get(preset or "", []) + list(exempt)
         self._exempt = re.compile("|".join(f"(?:{p})" for p in patterns), re.I)
         self.stats = {"challenged": 0, "passed": 0, "failed": 0}
+        self._uses: dict[str, int] = {}  # pass -> page views (bounded below)
+        self._lock = threading.Lock()
 
     # --------------------------------------------------------- crypto --
     def _mac(self, message: str) -> str:
@@ -77,13 +85,21 @@ class Gate:
         expires = int((now if now is not None else time.time()) + PASS_SECONDS)
         return f"v1.{expires}.{self._mac(f'pass|{expires}|{client}|{self._browser(environ)}')}"
 
-    def has_pass(self, client: str, environ, now: float | None = None) -> bool:
+    def has_pass(self, client: str, environ, now: float | None = None, count: bool = False) -> bool:
         cookies = environ.get("HTTP_COOKIE", "")
         match = re.search(rf"(?:^|;\s*){PASS_COOKIE}=v1\.(\d{{1,12}})\.([0-9a-f]{{64}})", cookies)
         if not match or int(match.group(1)) < (now if now is not None else time.time()):
             return False
         expected = self._mac(f"pass|{match.group(1)}|{client}|{self._browser(environ)}")
-        return hmac.compare_digest(expected, match.group(2))
+        if not hmac.compare_digest(expected, match.group(2)):
+            return False
+        if not count:
+            return True
+        with self._lock:
+            if len(self._uses) > 200_000:
+                self._uses.clear()  # at worst every holder gets a fresh budget once
+            used = self._uses[expected] = self._uses.get(expected, 0) + 1
+        return used <= PASS_PAGES
 
     def solved(self, client: str, environ, challenge: str, nonce: str, now: float | None = None) -> bool:
         if not nonce.isdigit() or len(nonce) > 12:
@@ -96,18 +112,25 @@ class Gate:
     def exempt(self, environ) -> bool:
         path = environ.get("PATH_INFO", "/") or "/"
         query = environ.get("QUERY_STRING", "")
+        if query:
+            names = [php_name(unquote_plus(part.split("=", 1)[0])) for part in query.split("&") if part]
+            if len(names) != len(set(names)):
+                return False  # a repeated field: PHP uses the last one, the exemption looked at the first
         target = normalize_path(path) + ("?" + query if query else "")
-        return is_static(normalize_path(path)) or bool(self._exempt.search(target))
+        return bool(self._exempt.search(target))
 
     def __call__(self, environ, start_response, client: str):
         """Answer the request if the gate must; None when the visitor may go on to the site."""
         path = environ.get("PATH_INFO", "/")
         if path == GATE_PATH:
             return self._verify(environ, start_response, client)
-        if self.exempt(environ) or self.has_pass(client, environ):
+        if self.exempt(environ):
+            return None
+        static = is_static(normalize_path(path or "/"))
+        if self.has_pass(client, environ, count=not static):
             return None
         self.stats["challenged"] += 1
-        if environ.get("REQUEST_METHOD", "GET") not in ("GET", "HEAD") or not _browser_like(environ):
+        if static or environ.get("REQUEST_METHOD", "GET") not in ("GET", "HEAD") or not _browser_like(environ):
             body = json.dumps({"error": "site under attack, retry shortly",
                                "error_ru": "сайт отражает атаку, повторите чуть позже"}).encode()
             start_response("503 Service Unavailable", [("Content-Type", "application/json"),
