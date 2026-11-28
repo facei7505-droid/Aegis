@@ -47,6 +47,7 @@ PHP_ERRORS = re.compile(
     r"(?:</b>)?:\s{1,5}.{1,300}? in (?:<b>)?(?:/|[A-Za-z]:\\)[^<\s]{1,200}(?:</b>)? on line", re.S)
 SYSTEM_FILES = re.compile(r"root:[x*]?:0:0:[^\n]{0,80}:/root:|\buid=\d{1,6}\([\w.-]{1,32}\) gid=\d{1,6}\("
                           r"|\[boot loader\][^\n]{0,40}\n[^\n]{0,80}timeout=|; for 16-bit app support")
+PHP_ERRORS_I = re.compile(PHP_ERRORS.pattern, re.S | re.I)
 SQL_SYNTAX = re.compile(r"['\"\\`;]|--|/\*|\b(?:union|select|sleep|benchmark|waitfor)\b|\b(?:or|and)\s+\d", re.I)
 
 
@@ -56,7 +57,11 @@ def _shell_titles() -> list[str]:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return []
-    return [line for line in (raw.strip() for raw in lines) if line and not line.startswith("#") and len(line) >= 8]
+    return [line for line in (raw.strip() for raw in lines)
+            if line and not line.startswith("#") and len(line) >= 8 and line not in LEGIT_TOOLS]
+
+
+LEGIT_TOOLS = {"<title>Tiny File Manager</title>"}  # in the CRS list, but also a file manager owners install
 
 
 _SHELLS: list[str] | None = None
@@ -96,6 +101,7 @@ class Finding:
     evidence: str       # the matched text (short)
     fields: list[str]   # request fields carrying SQL syntax (sql_error only)
     block: bool         # replace the answer
+    ban: bool = False   # ...and ban the requester: only when the request itself asked for the leak
 
 
 # Cheap literal hints in front of the patterns: a 300 KB shop page is scanned in about a millisecond
@@ -106,33 +112,74 @@ SYSTEM_HINTS = ("root:", "uid=", "[boot loader]", "16-bit app")
 PHP_HINTS = ("error", "warning", "notice", "deprecated", "uncaught")
 
 
-def _around(text: str, low: str, hints, pattern: re.Pattern, before: int = 300, after: int = 400):
+def _around(low: str, hints, pattern: re.Pattern, before: int = 300, after: int = 400):
+    """Run `pattern` on the lower-cased text, only in windows around literal hints. Overlapping windows are
+    merged, so decoy hints cost at most one pass over the page, and no occurrence is skipped."""
     for hint in hints:
-        start = low.find(hint)
-        checked = 0
-        while start != -1 and checked < 20:
-            found = pattern.search(text, max(0, start - before), start + after)
+        windows: list[list[int]] = []
+        pos = low.find(hint)
+        while pos != -1:
+            lo, hi = max(0, pos - before), pos + after
+            if windows and lo <= windows[-1][1]:
+                windows[-1][1] = hi
+            else:
+                windows.append([lo, hi])
+            pos = low.find(hint, pos + 1)
+        for lo, hi in windows:
+            found = pattern.search(low, lo, hi)
             if found:
                 return found
-            start = low.find(hint, start + after)
-            checked += 1
     return None
 
 
-def examine(text: str, request_fields: dict[str, str]) -> Finding | None:
+def _reflected(evidence: str, request_text: str) -> bool:
+    """The answer only repeats what the request sent (a search page echoing the query): no proof of anything."""
+    probe = re.sub(r"\s+", " ", evidence.lower()).strip()[:40]
+    return len(probe) >= 6 and probe in request_text
+
+
+def _request_text(target: str, fields: dict[str, str]) -> str:
+    import html as _html
+    from urllib.parse import unquote_plus
+    parts = [unquote_plus(target)] + [f"{k} {v}" for k, v in fields.items()]
+    text = " ".join(parts).lower()
+    return re.sub(r"\s+", " ", text + " " + _html.unescape(text))
+
+
+def _attack_in_request(target: str, fields: dict[str, str]) -> bool:
+    """Request-side evidence that the system file or command output was asked for (not just served)."""
+    from .detectors import score_all
+    for value in [target, *fields.values()]:
+        classes = score_all(value or "")[3]
+        if classes.get("path_traversal", 0) >= 0.5 or classes.get("command_injection", 0) >= 0.5:
+            return True
+    return False
+
+
+def _is_page(low: str) -> bool:
+    head = low[:4096]
+    return any(tag in head for tag in ("<html", "<body", "<div", "<p>", "<pre", "<!doctype"))
+
+
+def examine(text: str, request_fields: dict[str, str], target: str = "") -> Finding | None:
+    """What the answer proves. Answers that merely reflect the request prove nothing and are ignored."""
     low = text.lower()
-    found = _around(text, low, SYSTEM_HINTS, SYSTEM_FILES)
-    if found:
-        return Finding("system_file", found.group(0)[:80], [], True)
+    request_text = _request_text(target, request_fields)
+    found = _around(low, SYSTEM_HINTS, SYSTEM_FILES)
+    if found and not _reflected(found.group(0), request_text):
+        # A raw file (no page around it) is a leak whoever asked; a page that shows `id` output or an
+        # /etc/passwd example is content. Banning needs the request itself to have asked for the file.
+        asked = _attack_in_request(target, request_fields)
+        return Finding("system_file", found.group(0)[:80], [], asked or not _is_page(low), ban=asked)
     shell = web_shell(text)
     if shell:
-        return Finding("web_shell", shell[:80], [], True)
-    found = _around(text, low, SQL_HINTS, SQL_ERRORS)
-    if found:
+        return Finding("web_shell", shell[:80], [], False)  # someone runs a shell here: alert, never ban the visitor
+    found = _around(low, SQL_HINTS, SQL_ERRORS)
+    if found and not _reflected(found.group(0), request_text):
         fields = [name for name, value in request_fields.items() if SQL_SYNTAX.search(value or "")]
-        return Finding("sql_error", found.group(0)[:80], fields, bool(fields))
-    found = _around(text, low, PHP_HINTS, PHP_ERRORS, before=40, after=700)
-    if found:
+        return Finding("sql_error", found.group(0)[:80], fields, len(fields) == 1)
+    found = _around(low, PHP_HINTS, PHP_ERRORS_I, before=40, after=700)
+    if found and not _reflected(found.group(0), request_text):
         return Finding("php_error", re.sub(r"<[^>]+>", "", found.group(0))[:120], [], False)
     return None
 

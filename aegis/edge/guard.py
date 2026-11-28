@@ -15,6 +15,7 @@ the site: its usual widgets (Yandex Metrika, Jivo, Kaspi, maps) never cause an a
 """
 from __future__ import annotations
 
+import html
 import hashlib
 import http.client
 import json
@@ -258,7 +259,9 @@ class Guard:
         for kind, text in findings:
             icon = {"down": "🔴", "up": "🟢", "deface": "🚨", "new_script": "⚠️", "loader": "⚠️", "spam": "⚠️",
                     "title": "⚠️"}.get(kind, "⚠️")
-            message = f"{icon} <b>{site.domain}</b>: {text}"
+            # The texts quote the page (titles, words, domains): whoever hacked it controls them, so they are
+            # escaped before Telegram reads the message as HTML (no injected links, no lost alerts).
+            message = f"{icon} <b>{html.escape(site.domain)}</b>: {html.escape(text, quote=False)}"
             if bot is not None:
                 for chat in {*self.edge.settings.owner_chats, *site.chats}:
                     bot.send(chat, message)

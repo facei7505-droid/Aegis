@@ -98,7 +98,7 @@ class ResponseGuard:
         if not text:
             return None
         fields = request_fields(target, body, headers.get("Content-Type", ""))
-        finding = examine(text, fields)
+        finding = examine(text, fields, target)
         if finding is None:
             return None
         page = target.split("?")[0]

@@ -130,10 +130,25 @@ def test_confirmed_injection_point_is_closed(shop_gateway):
 def test_leaked_system_file_is_replaced(shop_gateway):
     gw, get = shop_gateway
     status, body = get("/download?file=report.pdf")
-    assert status == 403 and b"root:x" not in body
+    assert status == 403 and b"root:x" not in body               # a raw /etc/passwd never leaves
     assert gw.shields["shop"].core.incidents[-1].attack_type == "exploit_confirmed"
-    assert get("/")[0] == 403                                    # that address does not get a second try
+    assert get("/")[0] == 200                                    # but nothing in the request asked for it: no ban
+
+
+def test_requester_of_a_leak_gets_no_second_try(shop_gateway):
+    gw, get = shop_gateway
+    status, body = get("/download?file=report.pdf%2500")         # a null byte: too weak to block on its own
+    assert status == 403 and b"root:x" not in body
+    assert get("/")[0] == 403                                    # it asked for the file and got it: banned
     assert get("/", client="203.0.113.77")[0] == 200
+
+
+def test_pages_that_show_system_files_are_content():
+    page = "<html><body><h1>Linux для начинающих</h1><pre>$ id\nuid=0(root) gid=0(root) groups=0(root)</pre>"
+    finding = examine(page, {})
+    assert finding is not None and not finding.block and not finding.ban
+    echo = "<html><body>По запросу «uid=0(root) gid=0(root)» ничего не найдено</body></html>"
+    assert examine(echo, {"q": "uid=0(root) gid=0(root)"}, "/search?q=uid%3D0%28root%29+gid%3D0%28root%29") is None
 
 
 def test_php_warnings_are_reported_not_blocked(shop_gateway):

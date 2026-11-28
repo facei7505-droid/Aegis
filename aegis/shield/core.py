@@ -295,14 +295,17 @@ class ShieldCore:
                                                   finding.evidence]
             value, param = fields.get(finding.fields[0], ""), finding.fields[0]
         elif kind in ("system_file", "web_shell"):
-            attack, signals, value, param = "exploit_confirmed", [kind, finding.evidence], finding.evidence, kind
+            attack, signals, value, param = ("exploit_confirmed", [kind, finding.evidence] + (["banned"] if finding.ban
+                                             else []), finding.evidence, kind)
         else:
             attack, signals, value, param = "data_leak", [kind, finding.evidence], finding.evidence, kind
         det = Detection(attack, 1.0, signals, value, "response", param, {attack: 1.0})
-        strike = attack in ("injection_point", "exploit_confirmed")
+        # Only the request decides about the requester: a reflected or merely shown leak must not ban a
+        # visitor here and on every other site (shared immunity).
+        strike = attack == "injection_point" or finding.ban
         blocked = finding.block and self.config.mode == "block" and replaced
         incident = self._incident(det, client, method, path, now, 0.0, strike=strike, blocked=blocked).incident
-        if attack == "exploit_confirmed" and self.config.mode == "block" and self.config.ban_seconds:
+        if finding.ban and self.config.mode == "block" and self.config.ban_seconds:
             until = now + self.config.ban_seconds  # an attack that worked: no second try
             with self._lock:
                 self._banned[client] = until
