@@ -87,6 +87,8 @@ nav .wrap{display:flex;align-items:center;justify-content:space-between;min-heig
 .fact b{font-family:Unbounded,sans-serif;font-size:clamp(28px,3vw,36px);display:block;line-height:1.1;margin-bottom:8px}
 .fact p{color:color-mix(in srgb,var(--band-ink) 80%,transparent);font-size:15.5px}
 @media(max-width:760px){.facts{grid-template-columns:minmax(0,1fr)}}
+#more .fact{border-top-color:var(--line)} #more .fact p{color:var(--muted)}
+#more .fact b{font-size:20px;line-height:1.25;display:block;margin-bottom:8px}
 /* steps */
 .steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;margin-top:36px;counter-reset:s}
 .step{padding:0 20px 0 0;position:relative}
@@ -145,7 +147,7 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px}
   <a class="brand" href="#top" aria-label="Aegis Щит">
     <svg width="26" height="30" viewBox="0 0 26 30" aria-hidden="true"><path d="M13 1 25 5v9c0 8-5.5 13-12 15C6.5 27 1 22 1 14V5Z" fill="#0f4a3b"/><path d="m7.5 15 4 4 7-8" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
     Aegis Щит</a>
-  <div class="links"><a href="#how">Как подключаем</a><a href="#proof">Проверено</a><a href="#prices">Цены</a><a href="#faq">Вопросы</a></div>
+  <div class="links"><a href="#how">Как подключаем</a><a href="#more">Возможности</a><a href="#proof">Проверено</a><a href="#prices">Цены</a><a href="#faq">Вопросы</a></div>
   <a class="btn primary js-contact" href="#">Проверить сайт</a>
 </div></nav>
 
@@ -213,13 +215,28 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px}
   </div>
 </section>
 
+<section class="band" id="more">
+  <div class="wrap">
+    <h2>Больше, чем фильтр запросов</h2>
+    <p class="lead" style="margin-top:14px">Обычный WAF смотрит только на входящие запросы. Щит смотрит и на то, что отвечает ваш сайт, и на сам сайт.</p>
+    <div class="facts">
+      <div class="fact"><b>Находит дыры сам</b><p>Если запрос с кавычкой вызвал ошибку базы данных — уязвимость настоящая. Щит сразу закрывает это поле и пишет, что передать программисту.</p></div>
+      <div class="fact"><b>Замок на сервер</b><p>Маленький модуль для WordPress и Битрикса: сайт отвечает только через защиту. Старый IP сервера больше не лазейка.</p></div>
+      <div class="fact"><b>Сторож главной</b><p>Каждые 5 минут: сайт работает, на странице нет чужих скриптов для кражи карт, SEO-спама и надписи «взломан».</p></div>
+      <div class="fact"><b>Режим осады</b><p>Сайт заваливают боты? Люди проходят проверку браузера за секунду, боты — нет. Без капчи, платежи и обмен с 1С идут как обычно.</p></div>
+      <div class="fact"><b>Общий иммунитет</b><p>Злоумышленник, пойманный на одном сайте, сразу закрыт на всех сайтах под защитой.</p></div>
+      <div class="fact"><b>Не подведёт при аварии</b><p>Если наш сервер упадёт, ваш сайт продолжит работать: отдельный сторож переключит трафик напрямую.</p></div>
+    </div>
+  </div>
+</section>
+
 <section class="band" id="proof" style="background:var(--soft)">
   <div class="wrap">
-    <h2>Проверено на настоящем сайте, а не на словах</h2>
-    <p class="lead" style="margin-top:14px">Мы поставили защиту перед настоящим WordPress и прогнали через неё в браузере обычный рабочий день владельца: публикации с кнопкой Kaspi и картой, счётчик Метрики, загрузку фото, пользователей и комментарии с казахскими именами. Потом атаковали.</p>
+    <h2>Проверено на настоящих сайтах, а не на словах</h2>
+    <p class="lead" style="margin-top:14px">Мы поставили защиту перед настоящим WordPress и интернет-магазином на 1С-Битрикс и прогнали через неё в браузере обычный рабочий день: заказы с адресом в Шымкенте, публикации с кнопкой Kaspi и картой, счётчик Метрики, загрузку фото, работу менеджера в админке. Потом атаковали.</p>
     <div class="proof">
       <div class="nums">
-        <div class="num"><b>0</b><span>ложных блокировок на 2&nbsp;247 запросах работы админа и покупателей</span></div>
+        <div class="num"><b>0</b><span>ложных блокировок: WordPress — 21 из 21 сценария, Битрикс — 17 из 17</span></div>
         <div class="num"><b>100%</b><span>попыток внедрить скрипт и выполнить команду остановлено</span></div>
         <div class="num"><b>10</b><span>попыток пароля — и вход для этого адреса закрыт, сайт открыт</span></div>
         <div class="num"><b>+2,5 мс</b><span>к загрузке страницы — посетитель не заметит</span></div>

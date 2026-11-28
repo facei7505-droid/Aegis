@@ -107,5 +107,77 @@
   "clients_32_req_per_s": 783,
   "errors": 0,
   "note": "static file from PHP's built-in server through Aegis; includes the origin's own time"
+ },
+ "v1_4_with_connector": {
+  "note": "v1.4: connector (mu-plugin) installed, origin lock enforced, editor pass, CRS lists, libinjection",
+  "block_mode_session": {
+   "steps_ok": 21,
+   "steps": 21,
+   "refused": 0,
+   "incidents": 0
+  },
+  "attacks": {
+   "brute_force": {
+    "attempts": 40,
+    "answered_by_wordpress": 10,
+    "refused_429": 30,
+    "first_refused_at": 11,
+    "site_still_readable": true
+   },
+   "xmlrpc_multicall": 403,
+   "xmlrpc_pingback": 403,
+   "author_enum": 403,
+   "rest_users": 403,
+   "rest_users_pretty": 403,
+   "upload_shell": 403,
+   "debug_log": 403,
+   "wp_config_backup": 403,
+   "wpscan_agent": 403,
+   "spoofed_editor_post": {
+    "status": 403,
+    "wordpress_answer": "{\"error\": \"blocked by Aegis\", \"reason\": \"xss\", \"incident\": \"c4d54ddfa48f\"}"
+   },
+   "bypass_attempts": {
+    "/health/../?author=1": 403,
+    "?author=1 + forged editor cookie": 403,
+    "REST users + forged cookie": 403,
+    "/index.php?rest_route=/wp/v2/users": 403,
+    "/wp-json/wp/v2/users/1": 403,
+    "//wp-content//uploads/x.php": 403,
+    "/a/%2e%2e/wp-content/debug.log": 403,
+    "users?who=authors + forged cookie (answered by WordPress)": "401 rest_forbidden_who",
+    "password guessing via /wp-login.php/x.css": "refused from attempt 11",
+    "chunked comment with <script>": 403
+   },
+   "flood": {
+    "requests": 400,
+    "ok": 150,
+    "refused_429": 250,
+    "first_refused_at": 151
+   },
+   "payloads": {
+    "sqli": {
+     "sent": 150,
+     "blocked": 106,
+     "rate": 0.707
+    },
+    "xss": {
+     "sent": 110,
+     "blocked": 110,
+     "rate": 1.0
+    },
+    "traversal": {
+     "sent": 150,
+     "blocked": 133,
+     "rate": 0.887
+    },
+    "cmd": {
+     "sent": 150,
+     "blocked": 150,
+     "rate": 1.0
+    }
+   }
+  },
+  "direct_to_origin": 403
  }
 }

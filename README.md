@@ -16,31 +16,45 @@
 
 One server protects many websites. The site owner changes one DNS record; Caddy issues the HTTPS
 certificate; Aegis applies the site's CMS preset (WordPress, 1C-Bitrix, OpenCart or generic) and
-forwards clean requests to the site's own server. Nothing in the site's code or hosting changes.
-Built for small businesses in Kazakhstan: Russian alerts and commands in Telegram, a monthly PDF
-report for the client, a 7-day learning period before anything is blocked.
+forwards clean requests to the site's own server. Built for small businesses in Kazakhstan: Russian
+alerts and commands in Telegram, a monthly PDF report for the client, a 7-day learning period before
+anything is blocked.
 
-| Measured on a real WordPress behind Aegis, driven in Chrome ([data](benchmarks/data/wordpress_lab.json)) | |
+What a protected site gets:
+
+| | |
 | --- | --- |
-| Ordinary owner and visitor work (posts with a Kaspi button and map, Yandex.Metrika counter, uploads, comments, settings): wrongful blocks | **0 of 2,247 requests** |
-| Same session, signatures without the WordPress preset | 3 would have been blocked (why presets exist) |
-| XSS / command injection / path traversal / SQLi strings from SecLists, sent to search and comments | **100% / 100% / 84% / 67%** (SQLi misses are mostly single words like `update`) |
-| Password guessing on wp-login.php | refused after 10 attempts, the rest of the site stays open |
-| xmlrpc multicall, user enumeration, PHP in uploads, debug.log, backups, WPScan | all refused (virtual patches) |
-| Added latency, WordPress page / static file (median) | **+2.5 ms / +0.8 ms** |
-| Throughput on 2 vCPU, origin included | **~750 requests/s**, 0 errors |
+| **Shield** | signatures, libinjection (the tokenizer behind ModSecurity's SQLi/XSS checks) as a second opinion, OWASP CRS file and shell lists used with context, CMS presets and virtual patches, login and flood limits |
+| **Origin lock** | a small PHP connector on the site's server answers only requests signed by Aegis, so the server's real IP is no back door; the CMS sees the visitor's real IP; editors carry a signed pass, so a forged "signed in" cookie relaxes nothing |
+| **Response guard** | reads the site's answers: a database error after a request with SQL syntax is a *confirmed* injection point, and Aegis closes exactly that field on that page and tells the owner what to fix; leaked system files or web-shell output are replaced and the address banned |
+| **Shared immunity** | an address banned for attacking one site is banned on every site of the server |
+| **Siege mode** | under a bot flood, visitors solve a one-second proof-of-work in the browser (idea of Anubis); bots without a browser get nothing. By hand (`/siege`) or automatically |
+| **Site guard** | every 5 minutes: is the site up, did a script from a new outside domain appear (card skimmers), obfuscated loaders, SEO spam, defacement |
+| **Failover** | if the Aegis server dies, a watchdog on a second machine points the sites back at their own servers and opens the connectors; sites keep working without protection until Aegis is back |
+
+| Measured on real CMSs behind Aegis, driven in Chrome | WordPress ([data](benchmarks/data/wordpress_lab.json)) | 1C-Bitrix 26 shop ([data](benchmarks/data/bitrix_lab.json)) |
+| --- | --- | --- |
+| Ordinary owner, staff and shopper work, block mode | **21/21 steps, 0 blocked** | **17/17 steps, 0 blocked** (checkout, SQL and PHP consoles incl.) |
+| Same session, signatures without the CMS preset | 3 would have been blocked | 3 would have been blocked |
+| Known CMS attacks (CVE-2022-27228, xmlrpc, enumeration, backdoors, backups, shells in uploads) | all refused | all refused |
+| Forged editor cookie posting `<script>` (connector installed) | 403 from Aegis | 403 from Aegis |
+| Request straight to the site's server, around Aegis | 403 from the connector | 403 from the connector |
+| SecLists XSS / commands / LFI / SQLi | 100% / 100% / 89% / 71% | 100% / 100% / 89% / 71% |
+| Password guessing | 429 after 10 tries, site stays open | 429 after 10 tries, site stays open |
 
 ```bash
 aegis check shop.kz --pdf shop.pdf                 # passive check to show a prospective client
-aegis edge add shop.kz --origin 198.51.100.7 --cms wordpress --client "ИП Ромашка"
+aegis edge add shop.kz --origin 198.51.100.7 --cms bitrix --client "ИП Ромашка"
 aegis edge origin-test shop.kz                     # before the client moves DNS
+aegis edge connector shop.kz                       # PHP files for the site: origin lock, real IP, editor pass
 aegis edge serve                                   # behind Caddy: deploy/docker-compose.yml
+aegis edge watchdog --config failover.json         # on a second machine
 ```
 
 Start here: [deploy/README.ru.md](deploy/README.ru.md) (from an empty server to the first client),
 [docs/SALES.ru.md](docs/SALES.ru.md) (offer, prices, objections, first messages),
-[docs/shield/index.html](docs/shield/index.html) (landing page for clients). Reproduce the lab:
-`benchmarks/wordpress/` (`setup.sh`, then `lab.sh` with `session.py` and `attack.py`).
+[docs/shield/index.html](docs/shield/index.html) (landing page for clients). Reproduce the labs:
+`benchmarks/wordpress/` and `benchmarks/bitrix/` (install, `lab.sh` with `session.py` and `attack.py`).
 
 ## Self-healing for Python developers (open source)
 
@@ -250,7 +264,7 @@ A separate reviewer agent tried to break Aegis: 18 confirmed findings, from a sh
 - **Parameter pollution** is covered for repeated names (joined with `,` and concatenated). A payload split across *different* parameter names that the app glues together is not reassembled.
 - **Self-healing on a live server** patches the source file. Your process still needs a reload, or a deploy for `propose` mode, before the fix is live. Until then the shield keeps blocking.
 - The range runs third-party apps (DSVW, vulpy) and real tools (sqlmap, commix), but on one machine with one attacker. The next milestone is pilots on real, maintained codebases.
-- **Aegis Edge** cannot stop traffic that goes to the site's origin directly: close the origin to everything but the Aegis server where the hosting allows it. WebSocket is not proxied (answered 501). The WordPress preset is measured on a real WordPress; the Bitrix and OpenCart presets are built from documentation and published attack write-ups and have not met a production site yet, which is what the learning week is for. One edge server is one point of failure: keep DNS TTL at 300 for a fast rollback.
+- **Aegis Edge** needs the site connector (or a firewall rule) to stop traffic that goes to the site's server directly. WebSocket is not proxied (answered 501). WordPress and 1C-Bitrix are measured on real installations in a lab, with scripted sessions; OpenCart is built from documentation and attack write-ups. None has met production traffic yet, which is what the learning week and a pilot are for. Failover needs a second machine and DNS in your zone (CNAME); a root domain without ALIAS support at the registrar has no automatic failover. The watchdog's Cloudflare provider is tested against a local fake of the API, not Cloudflare itself. The response guard reads answers up to 512 KB in full (larger or streamed ones only on the way through, so they cannot be stopped, only learned from).
 
 ## Roadmap
 

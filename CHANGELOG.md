@@ -3,6 +3,43 @@
 Each section is the release notes for its tag. The major tag (`v1`) used by the GitHub Action points
 at the latest `v1.x.y`.
 
+## v1.4.0
+
+Aegis Edge closes the ways around it, reads the site's answers, and is measured on a real 1C-Bitrix shop.
+
+- **Origin lock and site connectors.** Aegis signs every request it forwards (HMAC per site).
+  `aegis edge connector` writes a PHP connector: WordPress mu-plugin, Bitrix (dbconn.php + init.php), or
+  a generic file for any PHP site. The site then refuses requests that did not come through Aegis, sees
+  the visitor's real IP, and gives editors a signed pass, so a forged "signed in" cookie relaxes nothing.
+  `--verify` checks it from Aegis' side. Firewall rules for VPS clients are printed too.
+- **Response guard.** Aegis reads the start of every text answer (gzip and deflate too). A database
+  error after a request with SQL syntax is a confirmed injection point: the answer is replaced and that
+  field on that page is closed (digits only, or no quotes), kept across restarts, with a Russian alert on
+  what to fix. Leaked system files and web-shell output are replaced and the address banned at once.
+  PHP warnings are reported, never blocked.
+- **libinjection** (BSD-3, vendored C, `aegis build-engine`) as a second SQLi/XSS opinion, and **OWASP
+  CRS phrase lists** (Apache-2.0) for system files, restricted files and shell programs, used only where
+  a value is a file path. CSIC 2010: still 0 of 72,000 normal requests flagged; held-out LFI lists
+  81% -> 92% and 94% -> 98%; quick-SQLi 70% -> 94%; XSS-RSNAKE 72% -> 91%.
+- **Shared immunity.** An address banned on one site is banned on every site of the server for the same
+  time; learning sites do not contribute; a client's /unban pardons only their site.
+- **Siege mode.** A proof-of-work gate (the idea of Anubis): visitors pass in about a second, bots
+  without a browser never; payment callbacks, 1C exchange and cron are exempt. Telegram `/siege`, or
+  automatic above 1,800 requests a minute. 0.3 s median in real Chrome on the lab machine.
+- **Site guard.** Every 5 minutes: is the site up, did a script from a new outside domain appear (card
+  skimmers), an obfuscated loader, SEO spam, a defacement. First look and learning only record.
+- **Failover.** `aegis edge watchdog` on a second machine: if Aegis stops answering, it opens the
+  connectors with a signed token and points the sites' CNAME targets at their own servers (Cloudflare API
+  or any command), then back when Aegis returns. `aegis edge failover-export` writes its config.
+- **Real 1C-Bitrix lab** (26.150 Enterprise for PostgreSQL, online-shop solution, installed by its own
+  wizard in Chrome): shoppers and staff, block mode, preset and connector: 17/17 steps, 0 requests
+  refused, including the checkout, the SQL console and the PHP command line. Known Bitrix attacks all
+  refused; forged admin post 403; straight to the shop's server 403.
+- **WordPress lab re-run with the connector:** 21/21 steps, 0 refused; forged editor post refused by
+  Aegis (403) instead of WordPress (401); SecLists LFI 84% -> 89%, SQLi 67% -> 71%.
+- **Fixes:** the gateway and test servers no longer do a reverse DNS lookup when binding (stalled CI on
+  macOS); visitors never see X-Aegis-* headers.
+
 ## v1.3.0
 
 Aegis Edge: a protection service for client websites, measured on a real WordPress.
