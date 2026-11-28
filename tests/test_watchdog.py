@@ -45,11 +45,12 @@ def test_names_and_records():
 
 def test_failover_token():
     now = 1_800_000_000
-    token = failover_token(SECRET, "shop.kz", now + 1800)
-    assert verify_failover(SECRET, token, "SHOP.kz:443", now)
+    token = failover_token(SECRET, "shop.kz", now + 1800, issued=now)
+    assert verify_failover(SECRET, token, "SHOP.kz:443", now) == (now + 1800, now)
     assert not verify_failover(SECRET, token, "other.kz", now)
-    assert not verify_failover(SECRET, token, "shop.kz", now + 1801)                     # ran out
-    assert not verify_failover(SECRET, failover_token(SECRET, "shop.kz", now + 90000), "shop.kz", now)  # > a day
+    assert not verify_failover(SECRET, token, "shop.kz", now + 301)                      # not fresh: no replays later
+    assert not verify_failover(SECRET, failover_token(SECRET, "shop.kz", now + 90000, issued=now), "shop.kz", now)
+    assert verify_failover(SECRET, failover_token(SECRET, "shop.kz", 0, issued=now), "shop.kz", now) == (0, now)
 
 
 def test_watchdog_fails_over_and_comes_back():
@@ -188,8 +189,30 @@ def test_failover_opens_a_locked_site(tmp_path):
         assert not dog.open_origin(dog.sites[0], time.time())      # wrong secret: stays locked
         assert visit()[0] == 403
         dog.sites[0].secret = SECRET
-        assert dog.open_origin(dog.sites[0], time.time())
+        now = time.time()
+        assert dog.open_origin(dog.sites[0], now)
         assert visit() == (200, "shop")
+        state = list(tmp_path.glob(".aegis-failover-*.php"))
+        assert len(state) == 1 and not list(tmp_path.glob("aegis-open-*"))   # next to the connector, not in /tmp
+
+        # Aegis is back: the close token shuts the side door at once, and the old "open" cannot be replayed.
+        old_open = failover_token(SECRET, "shop.kz", int(now) + 1800, issued=int(now))
+        assert dog.open_origin(dog.sites[0], now + 1, close=True)
+        assert visit()[0] == 403
+
+        def send(token):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn.request("GET", "/", headers={"Host": "shop.kz", "X-Aegis-Failover": token})
+            resp = conn.getresponse()
+            resp.read()
+            return resp.getheader("X-Aegis-Connector")
+        assert send(old_open) == "failover-stale"
+        assert visit()[0] == 403
+        assert send(failover_token(SECRET, "shop.kz", int(now) + 1800, issued=int(now) - 600)) == "refused"  # stale
+
+        # A forged or tampered state file opens nothing.
+        state[0].write_text("<?php exit; ?>\n99999999999.99999999999." + "0" * 64)
+        assert visit()[0] == 403
     finally:
         srv.terminate()
         srv.wait(10)

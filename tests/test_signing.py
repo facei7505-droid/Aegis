@@ -24,21 +24,44 @@ SECRET = "a" * 64
 
 def test_origin_signature_round_trip():
     now = 1_800_000_000
-    value = origin_auth(SECRET, "Shop.KZ:443", "203.0.113.9", now)
+    value = origin_auth(SECRET, "Shop.KZ:443", "203.0.113.9", "GET", "/?q=1", now=now)
     assert value.startswith("v1.1800000000.")
-    assert verify_origin(SECRET, value, "shop.kz", "203.0.113.9", now + 10)
-    assert not verify_origin(SECRET, value, "shop.kz", "203.0.113.10", now)       # another visitor address
-    assert not verify_origin(SECRET, value, "evil.kz", "203.0.113.9", now)        # another site
-    assert not verify_origin("b" * 64, value, "shop.kz", "203.0.113.9", now)      # another secret
-    assert not verify_origin(SECRET, value, "shop.kz", "203.0.113.9", now + 301)  # too old
-    for junk in ("", "v1", "v1.x.y", "v2.1800000000.ab", "v1.-5.ab", value + ".x"):
-        assert not verify_origin(SECRET, junk, "shop.kz", "203.0.113.9", now)
+
+    def ok(*, host="shop.kz", ip="203.0.113.9", method="get", target="/?q=1", at=now + 10, secret=SECRET):
+        return verify_origin(secret, value, host, ip, method, target, now=at)
+    assert ok()
+    assert not ok(ip="203.0.113.10")          # another visitor address
+    assert not ok(host="evil.kz")             # another site
+    assert not ok(secret="b" * 64)            # another secret
+    assert not ok(at=now + 301)               # too old
+    assert not ok(method="POST")              # a leaked signature opens only the request it was made for
+    assert not ok(target="/wp-login.php")
+    for junk in ("", "v1", "v1.x.y", "v2.1800000000.ab", "v1.-5.ab", "v1.+5.ab", value + ".x"):
+        assert not verify_origin(SECRET, junk, "shop.kz", "203.0.113.9", now=now)
 
 
 def test_canonical_host():
     assert canonical_host("Shop.KZ:8443") == "shop.kz"
     assert canonical_host("[2001:db8::1]:443") == "[2001:db8::1]"
     assert canonical_host("2001:db8::1") == "2001:db8::1"
+    assert canonical_host("[::1") == "[::1"           # malformed: left alone, the same as PHP does
+    assert canonical_host("ШОП.KZ") == "ШОП.kz"       # ASCII-only lowercase, like PHP's strtolower
+
+
+HOSTS = ["shop.kz", "SHOP.KZ:443", "shop.kz:", "shop.kz:8080", "[2001:DB8::1]:443", "[2001:db8::1]", "2001:db8::1",
+         "[::1", " shop.kz ", "shop.kz.", "shop.kz:443:1", "[x]y:1", "shop.kz\t", "", ":443", "a:b:c", "xn--80aswg.kz",
+         "ШОП.kz", "shop.kz%3a443", "[2001:db8::1]junk", "\u00a0shop.kz", "shop.kz\x0b"]
+
+
+@needs_php
+def test_php_and_python_agree_on_hosts(tmp_path):
+    import json
+    [(name, source)] = connector.render("generic", SECRET, "off")
+    (tmp_path / name).write_text(source)
+    out = subprocess.run([PHP, "-r", f"require '{tmp_path / name}'; $h = json_decode(stream_get_contents(STDIN), "
+                          "true); echo json_encode(array_map('aegis_canonical_host', $h));"],
+                         input=json.dumps(HOSTS), capture_output=True, text=True, timeout=30, check=True).stdout
+    assert json.loads(out) == [canonical_host(h) for h in HOSTS]
 
 
 def test_editor_pass():
@@ -58,7 +81,7 @@ def test_proxy_signs_and_strips_client_supplied_aegis_headers():
                "HTTP_X_AEGIS_AUTH": "v1.1.forged", "HTTP_X_AEGIS_CONNECTOR": "ok", "wsgi.url_scheme": "https"}
     headers = proxy.request_headers(environ)
     assert "X-Aegis-Connector" not in headers
-    assert verify_origin(SECRET, headers[ORIGIN_HEADER], "shop.kz", "203.0.113.9")
+    assert verify_origin(SECRET, headers[ORIGIN_HEADER], "shop.kz", "203.0.113.9", "GET", "/")
     assert ORIGIN_HEADER not in Proxy(Origin("https://198.51.100.7")).request_headers(environ)
 
 
@@ -104,12 +127,14 @@ def _php(code: str) -> str:
 def test_php_accepts_what_python_signs(tmp_path):
     [(name, source)] = connector.render("generic", SECRET, "off")
     (tmp_path / name).write_text(source)
-    value = origin_auth(SECRET, "shop.kz:443", "203.0.113.9")
+    value = origin_auth(SECRET, "shop.kz:443", "203.0.113.9", "POST", "/?s=a%27b")
     out = _php(f"$_SERVER['HTTP_X_AEGIS_AUTH']='{value}';$_SERVER['HTTP_X_REAL_IP']='203.0.113.9';"
-               f"$_SERVER['HTTP_HOST']='SHOP.kz:443';require '{tmp_path / name}';"
-               "echo aegis_origin_ok() ? 'yes' : 'no'; $_SERVER['HTTP_X_REAL_IP']='1.2.3.4';"
-               "echo aegis_origin_ok() ? 'yes' : 'no';")
-    assert out == "yesno"
+               f"$_SERVER['HTTP_HOST']='SHOP.kz:443';$_SERVER['REQUEST_METHOD']='post';"
+               f"$_SERVER['REQUEST_URI']='/?s=a%27b';require '{tmp_path / name}';"
+               "echo aegis_origin_ok() ? 'yes' : 'no'; $_SERVER['REQUEST_URI']='/';"
+               "echo aegis_origin_ok() ? 'yes' : 'no'; $_SERVER['REQUEST_URI']='/?s=a%27b';"
+               "$_SERVER['HTTP_X_REAL_IP']='1.2.3.4'; echo aegis_origin_ok() ? 'yes' : 'no';")
+    assert out == "yesnono"
 
 
 @needs_php
@@ -158,7 +183,7 @@ def test_locked_site_answers_only_through_aegis(tmp_path):
         assert get(signed) == (200, "ok", "shop:203.0.113.9")
         status, answer, _ = get({"X-Real-Ip": "203.0.113.9"})
         assert (status, answer) == (403, "refused")
-        status, answer, _ = get({**signed, ORIGIN_HEADER: origin_auth("b" * 64, "shop.kz", "203.0.113.9")})
+        status, answer, _ = get({**signed, ORIGIN_HEADER: origin_auth("b" * 64, "shop.kz", "203.0.113.9", "GET", "/")})
         assert (status, answer) == (403, "bad-signature") or (status, answer) == (403, "refused")
 
         site = SimpleNamespace(origin=f"http://127.0.0.1:{port}", tls_verify=True, domain="shop.kz", secret=SECRET)

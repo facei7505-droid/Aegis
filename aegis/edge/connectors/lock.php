@@ -14,9 +14,10 @@ if (!defined('AEGIS_TRUST_LOCAL')) { define('AEGIS_TRUST_LOCAL', true); }  // th
 
 if (!function_exists('aegis_canonical_host')) {
     function aegis_canonical_host($host) {
-        $host = strtolower(trim((string)$host));
+        $host = strtr(trim((string)$host, " \t\n\r\0\x0B"), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz');
         if ($host !== '' && $host[0] === '[') {
-            return substr($host, 0, strpos($host, ']') + 1);
+            $end = strpos($host, ']');
+            return $end === false ? $host : substr($host, 0, $end + 1);
         }
         if (substr_count($host, ':') === 1) {
             $host = substr($host, 0, strrpos($host, ':'));
@@ -36,7 +37,10 @@ if (!function_exists('aegis_canonical_host')) {
         }
         $ip = isset($_SERVER['HTTP_X_REAL_IP']) ? (string)$_SERVER['HTTP_X_REAL_IP'] : '';
         $host = aegis_canonical_host(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '');
-        return hash_equals(hash_hmac('sha256', "v1|$ts|$host|$ip", AEGIS_SECRET), $parts[2]);
+        $method = strtoupper(isset($_SERVER['REQUEST_METHOD']) ? (string)$_SERVER['REQUEST_METHOD'] : 'GET');
+        $uri = isset($_SERVER['REQUEST_URI']) ? (string)$_SERVER['REQUEST_URI'] : '/';
+        // Bound to the request line: a signature that leaks (phpinfo shows headers) opens only that request.
+        return hash_equals(hash_hmac('sha256', "v1|$ts|$host|$ip|$method|$uri", AEGIS_SECRET), $parts[2]);
     }
 
     function aegis_is_local() {
@@ -52,32 +56,59 @@ if (!function_exists('aegis_canonical_host')) {
 
     /*
      * Failover: when Aegis is down, the watchdog points DNS straight at this server and first sends a
-     * signed X-Aegis-Failover token. Until it runs out (at most a day; the watchdog renews it while
-     * Aegis stays down) visitors are let in directly, so the site keeps working without protection.
+     * signed, fresh X-Aegis-Failover token; until it runs out (renewed while Aegis stays down) visitors
+     * are let in directly, so the site keeps working without protection. When Aegis is back, a "close"
+     * token ends it at once. Tokens only move forward: an old "open" replayed after a "close" is refused.
+     * The state file sits next to this one (not in a shared /tmp), is a .php that prints nothing, and is
+     * signed, so neither another hosting account nor a visitor can open the site.
      */
-    function aegis_failover_flag() {
-        return rtrim(sys_get_temp_dir(), '/\\') . '/aegis-open-' . substr(hash('sha256', AEGIS_SECRET), 0, 16);
+    function aegis_failover_file() {
+        return __DIR__ . '/.aegis-failover-' . substr(hash('sha256', 'file|' . AEGIS_SECRET), 0, 16) . '.php';
+    }
+
+    function aegis_failover_state() {
+        $raw = @file_get_contents(aegis_failover_file());
+        if (!is_string($raw) || !preg_match('/(\d+)\.(\d+)\.([0-9a-f]{64})\s*$/', $raw, $m)) {
+            return array(0, 0);
+        }
+        if (!hash_equals(hash_hmac('sha256', 'state|' . $m[1] . '|' . $m[2], AEGIS_SECRET), $m[3])) {
+            return array(0, 0);
+        }
+        return array((int)$m[1], (int)$m[2]);  // until, issued
     }
 
     function aegis_failover() {
         if (isset($_SERVER['HTTP_X_AEGIS_FAILOVER'])) {
             $parts = explode('.', (string)$_SERVER['HTTP_X_AEGIS_FAILOVER']);
             $host = aegis_canonical_host(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '');
-            $ok = count($parts) === 3 && $parts[0] === 'v1' && ctype_digit($parts[1])
-                && (int)$parts[1] > time() && (int)$parts[1] <= time() + 86400
-                && hash_equals(hash_hmac('sha256', 'failover|' . (int)$parts[1] . '|' . $host, AEGIS_SECRET), $parts[2]);
-            if (!headers_sent()) {
-                header('X-Aegis-Connector: ' . ($ok ? 'failover-open' : 'bad-signature'));
+            $answer = 'bad-signature';
+            if (count($parts) === 4 && $parts[0] === 'v1' && ctype_digit($parts[1]) && ctype_digit($parts[2])) {
+                $until = (int)$parts[1];
+                $issued = (int)$parts[2];
+                $fresh = abs(time() - $issued) <= 300 && ($until === 0 || ($until > time() && $until <= $issued + 86400));
+                $mac = hash_hmac('sha256', "failover|$until|$issued|$host", AEGIS_SECRET);
+                if ($fresh && hash_equals($mac, $parts[3])) {
+                    list(, $last) = aegis_failover_state();
+                    if ($issued <= $last) {
+                        $answer = 'failover-stale';
+                    } else {
+                        $state = '<' . "?php exit; ?" . ">\n$until.$issued." . hash_hmac('sha256', "state|$until|$issued", AEGIS_SECRET);
+                        $ok = @file_put_contents(aegis_failover_file(), $state, LOCK_EX) !== false;
+                        $answer = !$ok ? 'failover-unwritable' : ($until ? 'failover-open' : 'failover-closed');
+                    }
+                }
             }
-            if ($ok) {
-                @file_put_contents(aegis_failover_flag(), (string)(int)$parts[1], LOCK_EX);
-                echo 'failover-open';
+            if (!headers_sent()) {
+                header('X-Aegis-Connector: ' . $answer);
+            }
+            if ($answer !== 'bad-signature') {
+                echo $answer;
                 exit;
             }
             return false;
         }
-        $flag = aegis_failover_flag();
-        return is_file($flag) && (int)@file_get_contents($flag) > time();
+        list($until) = aegis_failover_state();
+        return $until > time();
     }
 
     function aegis_lock() {

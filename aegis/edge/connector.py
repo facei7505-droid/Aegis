@@ -121,7 +121,7 @@ def verify(site, timeout: float = 15.0) -> Check:
             conn = http.client.HTTPConnection(origin.host, origin.port, timeout=timeout)
         headers = {"Host": site.domain, "User-Agent": "AegisEdge-connector-check/1.0", "X-Real-Ip": "192.0.2.10"}
         if signed:
-            headers[ORIGIN_HEADER] = origin_auth(site.secret, site.domain, "192.0.2.10", time.time())
+            headers[ORIGIN_HEADER] = origin_auth(site.secret, site.domain, "192.0.2.10", "GET", "/", now=time.time())
         try:
             conn.request("GET", "/", headers=headers)
             resp = conn.getresponse()

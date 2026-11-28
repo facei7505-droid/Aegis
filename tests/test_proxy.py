@@ -249,6 +249,6 @@ def test_origin_lock_signs_requests_and_keeps_the_connector_answer_inside(origin
     resp, body = through(spec, path="/connector", headers={"X-Forwarded-For": "203.0.113.9",
                                                             "X-Aegis-Auth": "v1.1.forged"})
     seen = json.loads(body)
-    assert verify_origin("s" * 64, seen["x-aegis-auth"], "shop.kz", "203.0.113.9")
+    assert verify_origin("s" * 64, seen["x-aegis-auth"], "shop.kz", "203.0.113.9", "GET", "/connector")
     assert seen["x-real-ip"] == "203.0.113.9"
     assert resp.getheader("X-Aegis-Connector") is None

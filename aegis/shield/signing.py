@@ -33,29 +33,39 @@ def _mac(secret: str, message: str) -> str:
     return hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
 
 
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
 def canonical_host(host: str) -> str:
-    host = (host or "").strip().lower()
+    """Host as both sides compare it. Mirrors the PHP exactly: trim() characters, ASCII-only lowercase."""
+    host = (host or "").strip(" \t\n\r\x00\x0b").translate(_ASCII_LOWER)
     if host.startswith("["):                       # [2001:db8::1]:443
-        return host.split("]")[0] + "]"
+        end = host.find("]")
+        return host if end == -1 else host[:end + 1]
     return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
 
 
-def origin_auth(secret: str, host: str, client_ip: str, now: float | None = None) -> str:
+def _origin_message(ts: int, host: str, client_ip: str, method: str, target: str) -> str:
+    # Bound to the request line: a signature that leaks (a phpinfo page shows request headers) opens only
+    # that same request again, for a few minutes, not the whole site.
+    return f"{VERSION}|{ts}|{canonical_host(host)}|{client_ip}|{method.upper()}|{target}"
+
+
+def origin_auth(secret: str, host: str, client_ip: str, method: str = "GET", target: str = "/",
+                now: float | None = None) -> str:
     ts = int(now if now is not None else time.time())
-    return f"{VERSION}.{ts}.{_mac(secret, f'{VERSION}|{ts}|{canonical_host(host)}|{client_ip}')}"
+    return f"{VERSION}.{ts}.{_mac(secret, _origin_message(ts, host, client_ip, method, target))}"
 
 
-def verify_origin(secret: str, value: str, host: str, client_ip: str, now: float | None = None) -> bool:
+def verify_origin(secret: str, value: str, host: str, client_ip: str, method: str = "GET", target: str = "/",
+                  now: float | None = None) -> bool:
     try:
         version, ts, mac = (value or "").split(".")
-        ts_i = int(ts)
     except ValueError:
         return False
-    if not ts.isdigit():
+    if version != VERSION or not ts.isdigit() or abs((now if now is not None else time.time()) - int(ts)) > MAX_SKEW:
         return False
-    if version != VERSION or abs((now if now is not None else time.time()) - ts_i) > MAX_SKEW:
-        return False
-    return hmac.compare_digest(mac, _mac(secret, f"{VERSION}|{ts_i}|{canonical_host(host)}|{client_ip}"))
+    return hmac.compare_digest(mac, _mac(secret, _origin_message(int(ts), host, client_ip, method, target)))
 
 
 def editor_pass(secret: str, user_id: int | str, expires: int) -> str:
@@ -79,17 +89,26 @@ FAILOVER_HEADER = "X-Aegis-Failover"
 FAILOVER_MAX = 24 * 3600  # the longest a site can be opened at once
 
 
-def failover_token(secret: str, host: str, until: int) -> str:
-    """Tells the connector to accept direct visitors until `until`: Aegis is down and DNS points at the site."""
-    return f"{VERSION}.{int(until)}.{_mac(secret, f'failover|{int(until)}|{canonical_host(host)}')}"
+def failover_token(secret: str, host: str, until: int, issued: int | None = None) -> str:
+    """Tells the connector to let direct visitors in until `until` (Aegis is down, DNS points at the site);
+    `until` 0 closes it again. Tokens are fresh (issued within MAX_SKEW) and only ever move forward: the
+    connector refuses one issued before the last it accepted, so a replayed "open" cannot undo a "close"."""
+    issued = int(issued if issued is not None else time.time())
+    return f"{VERSION}.{int(until)}.{issued}.{_mac(secret, f'failover|{int(until)}|{issued}|{canonical_host(host)}')}"
 
 
-def verify_failover(secret: str, value: str, host: str, now: float | None = None) -> bool:
-    try:
-        version, until, mac = (value or "").split(".")
-    except ValueError:
-        return False
+def verify_failover(secret: str, value: str, host: str, now: float | None = None) -> tuple[int, int] | None:
+    """(until, issued) of a valid, fresh token; None otherwise."""
     now = now if now is not None else time.time()
-    if version != VERSION or not until.isdigit() or not now < int(until) <= now + FAILOVER_MAX:
-        return False
-    return hmac.compare_digest(mac, _mac(secret, f"failover|{int(until)}|{canonical_host(host)}"))
+    try:
+        version, until, issued, mac = (value or "").split(".")
+    except ValueError:
+        return None
+    if version != VERSION or not until.isdigit() or not issued.isdigit():
+        return None
+    until_i, issued_i = int(until), int(issued)
+    if abs(now - issued_i) > MAX_SKEW or (until_i and not now < until_i <= issued_i + FAILOVER_MAX):
+        return None
+    if not hmac.compare_digest(mac, _mac(secret, f"failover|{until_i}|{issued_i}|{canonical_host(host)}")):
+        return None
+    return until_i, issued_i

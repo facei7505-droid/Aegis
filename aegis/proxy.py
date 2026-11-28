@@ -134,7 +134,8 @@ class Proxy:
         headers["X-Forwarded-Host"] = public_host
         headers["X-Forwarded-Proto"] = environ.get("HTTP_X_FORWARDED_PROTO") or environ.get("wsgi.url_scheme", "http")
         if self.secret:
-            headers[ORIGIN_HEADER] = origin_auth(self.secret, public_host, client)
+            headers[ORIGIN_HEADER] = origin_auth(self.secret, public_host, client,
+                                                 environ.get("REQUEST_METHOD", "GET"), self.target(environ))
         if self.guard is not None and headers.get("Accept-Encoding"):
             # Answers are read for leaks: ask only for encodings Python can read (Caddy compresses for visitors).
             readable = [t for t in headers["Accept-Encoding"].split(",")

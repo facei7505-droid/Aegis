@@ -171,12 +171,12 @@ class Watchdog:
                 continue
         return False
 
-    def open_origin(self, site: Site, now: float) -> bool:
-        """Send the connector its failover token. False when the site's server did not accept it."""
+    def open_origin(self, site: Site, now: float, close: bool = False) -> bool:
+        """Send the connector its failover token (or the closing one). False when the site did not accept it."""
         if not site.secret:
             return False
         scheme, host, port = _host_of(site.origin)
-        token = failover_token(site.secret, site.domain, int(now) + OPEN_FOR)
+        token = failover_token(site.secret, site.domain, 0 if close else int(now) + OPEN_FOR, issued=int(now))
         try:
             conn = self._connect(scheme, host, port, site.domain, site.tls_verify)
             conn.request("GET", "/", headers={"Host": site.domain, FAILOVER_HEADER: token,
@@ -184,7 +184,9 @@ class Watchdog:
             resp = conn.getresponse()
             resp.read(4096)
             conn.close()
-            return resp.getheader("X-Aegis-Connector") == "failover-open"
+            answer = resp.getheader("X-Aegis-Connector")
+            # stale: a token from this same second was already taken
+            return answer in (("failover-closed",) if close else ("failover-open",)) or answer == "failover-stale"
         except (OSError, http.client.HTTPException):
             return False
 
@@ -204,7 +206,7 @@ class Watchdog:
                 problems.append(f"{site.domain}: DNS не переключён ({exc})")
         return problems
 
-    def restore(self) -> list[str]:
+    def restore(self, now: float | None = None) -> list[str]:
         problems = []
         rtype, content = record_for(_host_of(self.server)[1])
         for site in self.sites:
@@ -212,6 +214,10 @@ class Watchdog:
                 self.dns.set(self._name(site), rtype, content)
             except Exception as exc:
                 problems.append(f"{site.domain}: DNS не вернулся ({exc})")
+            # Close the side door now rather than when the last token runs out.
+            if site.secret and not self.open_origin(site, now if now is not None else time.time(), close=True):
+                problems.append(f"{site.domain}: коннектор не закрылся, прямой доступ закроется сам за "
+                                f"{OPEN_FOR // 60} мин")
         return problems
 
     def tick(self, now: float | None = None) -> str:
@@ -225,7 +231,7 @@ class Watchdog:
             self._good += 1
             if self._good < self.recover_after:
                 return "recovering"
-            problems = self.restore()
+            problems = self.restore(now)
             self.failed, self._good = False, 0
             self.notify("✅ Aegis снова работает. Сайты переключены обратно на защиту."
                         + ("\n" + "\n".join(problems) if problems else ""))

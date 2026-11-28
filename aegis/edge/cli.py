@@ -316,8 +316,10 @@ def connector_command(registry, home: Path, args) -> int:
         if check.enforced:
             print("  ✓ запросы в обход Aegis получают 403: прямой IP сервера больше не лазейка")
         else:
-            print(f"  ! запросы в обход Aegis пока пропускаются (ответ {check.unsigned_status}): "
-                  "режим report или запрос пришёл с самого сервера")
+            print(f"  ! запросы в обход Aegis пока пропускаются (ответ {check.unsigned_status}). Причины:\n"
+                  "    • коннектор в режиме report (перевыпустите файл с --mode enforce);\n"
+                  "    • перед PHP на том же сервере стоит nginx или другой прокси, и сайт видит всех посетителей\n"
+                  "      как 127.0.0.1: перед подключением коннектора добавьте define('AEGIS_TRUST_LOCAL', false);")
         if not site.connector:
             registry.update(site.domain, connector=True)
         if site.cms == "wordpress":
