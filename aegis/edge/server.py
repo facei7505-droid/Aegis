@@ -35,6 +35,7 @@ class Settings:
     contact: str = ""                                      # shown to clients in reports (@telegram, phone)
     retention_days: int = 90
     alert_cooldown: int = 600                              # seconds between alerts of one kind per site
+    guard_interval: int = 300                              # seconds between site-guard looks (0 = off)
 
     @classmethod
     def load(cls, path: Path) -> "Settings":
@@ -123,10 +124,16 @@ class Edge:
         threading.Thread(target=self._tick, daemon=True, name="aegis-edge-tick").start()
         if self.bot:
             self.bot.start()
+        if self.settings.guard_interval:
+            from .guard import Guard
+            self.guard = Guard(self, interval=self.settings.guard_interval)
+            self.guard.start()
         return servers
 
     def stop(self) -> None:
         self._stop.set()
         if self.bot:
             self.bot.stop()
+        if getattr(self, "guard", None):
+            self.guard.stop()
         self.stats.flush()
