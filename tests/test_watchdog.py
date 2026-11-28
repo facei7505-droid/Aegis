@@ -161,7 +161,7 @@ def test_command_provider(tmp_path):
 @pytest.mark.skipif(PHP is None or sys.platform == "win32", reason="php not installed")
 def test_failover_opens_a_locked_site(tmp_path):
     """The connector refuses direct visitors until the watchdog's signed token arrives, then lets them in."""
-    name, source = connector.render("generic", SECRET, "enforce")
+    [(name, source)] = connector.render("generic", SECRET, "enforce")
     (tmp_path / name).write_text(source)
     (tmp_path / "index.php").write_text("<?php define('AEGIS_TRUST_LOCAL', false); require __DIR__ . '/" + name +
                                         "'; echo 'shop';")

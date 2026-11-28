@@ -34,16 +34,20 @@ if (!defined('ABSPATH')) {
 """
 
 
-def render(cms: str, secret: str, mode: str = "enforce") -> tuple[str, str]:
-    """(file name, PHP source) for this CMS, with the site's secret filled in."""
+def render(cms: str, secret: str, mode: str = "enforce") -> list[tuple[str, str]]:
+    """[(file name, PHP source)] for this CMS, with the site's secret filled in."""
     if mode not in ("enforce", "report", "off"):
         raise ValueError("mode: enforce, report или off")
     lock = (HERE / "lock.php").read_text(encoding="utf-8")
     lock = lock.replace("{{SECRET}}", secret).replace("{{MODE}}", mode)
     if cms == "wordpress":
         body = lock.split("<?php", 1)[1]
-        return "aegis-connector.php", WP_HEADER + body + (HERE / "wordpress-editor.php").read_text(encoding="utf-8")
-    return "aegis-lock.php", lock
+        return [("aegis-connector.php",
+                 WP_HEADER + body + (HERE / "wordpress-editor.php").read_text(encoding="utf-8"))]
+    if cms == "bitrix":  # the lock runs before the kernel (dbconn.php), the editor pass after it (init.php)
+        editor = (HERE / "bitrix-editor.php").read_text(encoding="utf-8").replace("{{SECRET}}", secret)
+        return [("aegis-lock.php", lock), ("aegis-editor.php", editor)]
+    return [("aegis-lock.php", lock)]
 
 
 INSTALL = {
@@ -52,10 +56,12 @@ INSTALL = {
      Плагины из mu-plugins включаются сами и не выключаются из админки.
   2. Проверьте: aegis edge connector {domain} --verify""",
     "bitrix": """Установка (1С-Битрикс):
-  1. Загрузите {name} в /bitrix/php_interface/ на сервере сайта.
+  1. Загрузите aegis-lock.php и aegis-editor.php в /bitrix/php_interface/ на сервере сайта.
   2. Первой строкой в /bitrix/php_interface/dbconn.php (после <?php) добавьте:
-         require_once __DIR__ . '/{name}';
-  3. Проверьте: aegis edge connector {domain} --verify""",
+         require_once __DIR__ . '/aegis-lock.php';
+  3. В /bitrix/php_interface/init.php (создайте, если нет) добавьте:
+         require_once __DIR__ . '/aegis-editor.php';
+  4. Проверьте: aegis edge connector {domain} --verify""",
     "opencart": """Установка (OpenCart):
   1. Загрузите {name} в корень сайта (рядом с config.php).
   2. Первой строкой в config.php и admin/config.php (после <?php) добавьте:

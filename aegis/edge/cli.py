@@ -100,7 +100,7 @@ def register(sub) -> None:
     k.add_argument("--verify", action="store_true", help="check the installed connector and start relying on it")
     k.add_argument("--mode", default="enforce", choices=["enforce", "report", "off"],
                    help="enforce: refuse requests that bypass Aegis (default); report: only mark them")
-    k.add_argument("--output", default=None, help="where to write the file (default: current folder)")
+    k.add_argument("--output", default=None, help="folder for the file(s) (default: current folder)")
     cmds.add_parser("failover-export", help="config for the failover watchdog (contains site secrets)")
     w = cmds.add_parser("watchdog", help="run on a second machine: switch sites to their servers if Aegis dies")
     w.add_argument("--config", required=True, help="from `aegis edge failover-export`, with your DNS provider filled in")
@@ -324,14 +324,18 @@ def connector_command(registry, home: Path, args) -> int:
             print("  ✓ редакторы теперь узнаются по подписанному пропуску, поддельная cookie входа не поможет")
         return 0
 
-    name, source = connector.render(site.cms, site.secret, args.mode)
-    out = Path(args.output or name)
-    out.write_text(source, encoding="utf-8")
-    try:
-        out.chmod(0o640)
-    except OSError:
-        pass
-    print(f"{out}: коннектор для {site.domain} ({site.cms}, режим {args.mode})")
+    files = connector.render(site.cms, site.secret, args.mode)
+    folder = Path(args.output or ".")
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, source in files:
+        out = folder / name
+        out.write_text(source, encoding="utf-8")
+        try:
+            out.chmod(0o640)
+        except OSError:
+            pass
+        print(f"{out}: коннектор для {site.domain} ({site.cms}, режим {args.mode})")
+    name = files[0][0]
     print("В файле секрет этого сайта: передавайте его клиенту лично, не в общий чат.\n")
     print(connector.INSTALL.get(site.cms, connector.INSTALL["generic"]).format(name=name, domain=site.domain))
     print()

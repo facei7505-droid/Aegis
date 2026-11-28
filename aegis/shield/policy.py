@@ -77,8 +77,11 @@ class Patch:
     value: re.Pattern | None = None    # some body or field value must match (e.g. an XML-RPC method)
     unless_param: re.Pattern | None = None  # ...not when a field with this name...
     unless_value: re.Pattern | None = None  # ...has this value (filters the CMS only allows signed-in users)
+    editors_ok: bool = False           # a signed editor pass (site connector) lifts it: an admin tool attackers abuse
 
     def matches(self, req: "Request") -> bool:
+        if self.editors_ok and req.editor:
+            return False
         if self.methods and req.method not in self.methods:
             return False
         if not self.path.search(req.route):
@@ -268,7 +271,7 @@ BITRIX = Preset(
         Patch("bx-cve-2022-27228", "эксплойт CVE-2022-27228 (модуль опросов Битрикса, удалённое выполнение кода)",
               _re(r"^/bitrix/tools/vote/uf\.php$"), frozenset({"POST"})),
         Patch("bx-html-editor-write", "запись файлов через html_editor_action.php (взломы сайтов на Битриксе)",
-              _re(r"^/bitrix/tools/html_editor_action\.php$"), frozenset({"POST"})),
+              _re(r"^/bitrix/tools/html_editor_action\.php$"), frozenset({"POST"}), editors_ok=True),
         Patch("bx-attach-events", "подмена обработчиков загрузки Битрикса (attachId[...][events])",
               _re(r"^/bitrix/"), None, _re(r"\[events\]")),
         Patch("bx-known-backdoors", "обращение к известному бэкдору Битрикса",

@@ -1,0 +1,87 @@
+{
+ "bitrix": "1C-Bitrix: Управление сайтом 26.150.0, Enterprise for PostgreSQL (trial distribution from 1c-bitrix.ru), solution 'Интернет-магазин' (clothes demo), PostgreSQL 16, PHP 8.3 built-in server",
+ "browser": "Google Chrome via Playwright",
+ "session_steps": [
+  "home page",
+  "catalog section and smart filter",
+  "search with quotes and symbols",
+  "product page, pick a size, add to cart",
+  "cart: change quantity",
+  "checkout with a Kazakh address and a comment",
+  "register an account",
+  "admin: sign in",
+  "admin: product description with table, Kaspi button and inline styles",
+  "admin: new page in Site Explorer (page source) with a Yandex.Metrika counter",
+  "admin: shop settings with quotes and an e-mail",
+  "admin: SQL console query",
+  "admin: PHP command line",
+  "admin: orders list with a filter",
+  "admin: users search",
+  "admin: clear the cache",
+  "shopper: the new promo page and the edited product"
+ ],
+ "block_mode_bitrix_preset_with_connector": {
+  "steps_ok": 17,
+  "steps": 17,
+  "refused": 0,
+  "incidents": 0
+ },
+ "signatures_only_monitor": {
+  "would_block": 3,
+  "what": [
+   "product description with an onclick Kaspi button (admin)",
+   "the same description through the template AJAX (admin)",
+   "page source with a Yandex.Metrika script (Site Explorer)"
+  ]
+ },
+ "attacks_block_mode_with_connector": {
+  "brute_force": {
+   "attempts": 40,
+   "answered_by_bitrix": 10,
+   "refused_429": 30,
+   "first_refused_at": 11,
+   "site_still_readable": true
+  },
+  "cve_2022_27228_vote_uf": 403,
+  "html_editor_action_write": 403,
+  "attach_events_anywhere": 403,
+  "backdoor_spread": 403,
+  "read_settings": 403,
+  "read_dbconn_backup": 403,
+  "backup_folder": 403,
+  "upload_shell": 403,
+  "env_file": 403,
+  "forged_admin_post": {
+   "status": 403,
+   "answer": "{\"error\": \"blocked by Aegis\", \"reason\": \"xss\", \"incident\": \"7c376ae3f24a\"}"
+  },
+  "direct_to_origin": 403,
+  "flood": {
+   "requests": 400,
+   "ok": 300,
+   "refused_429": 100
+  },
+  "payloads": {
+   "sqli": {
+    "sent": 150,
+    "blocked": 106,
+    "rate": 0.707
+   },
+   "xss": {
+    "sent": 110,
+    "blocked": 110,
+    "rate": 1.0
+   },
+   "traversal": {
+    "sent": 150,
+    "blocked": 133,
+    "rate": 0.887
+   },
+   "cmd": {
+    "sent": 150,
+    "blocked": 150,
+    "rate": 1.0
+   }
+  }
+ }
+}

@@ -83,12 +83,13 @@ def test_signed_editor_pass_replaces_the_forgeable_cookie():
 
 
 def test_render_fills_in_the_secret():
-    name, source = connector.render("wordpress", SECRET, "report")
+    [(name, source)] = connector.render("wordpress", SECRET, "report")
     assert name == "aegis-connector.php" and source.startswith("<?php\n/**\n * Plugin Name: Aegis Connector")
     assert SECRET in source and "'report'" in source and "{{" not in source
     assert source.count("<?php") == 1
-    name, source = connector.render("bitrix", SECRET)
+    (name, source), (editor_name, editor) = connector.render("bitrix", SECRET)
     assert name == "aegis-lock.php" and "'enforce'" in source and "editor" not in source
+    assert editor_name == "aegis-editor.php" and SECRET in editor and "OnBeforeProlog" in editor
     with pytest.raises(ValueError):
         connector.render("generic", SECRET, "maybe")
 
@@ -101,7 +102,7 @@ def _php(code: str) -> str:
 
 @needs_php
 def test_php_accepts_what_python_signs(tmp_path):
-    name, source = connector.render("generic", SECRET, "off")
+    [(name, source)] = connector.render("generic", SECRET, "off")
     (tmp_path / name).write_text(source)
     value = origin_auth(SECRET, "shop.kz:443", "203.0.113.9")
     out = _php(f"$_SERVER['HTTP_X_AEGIS_AUTH']='{value}';$_SERVER['HTTP_X_REAL_IP']='203.0.113.9';"
@@ -113,7 +114,7 @@ def test_php_accepts_what_python_signs(tmp_path):
 
 @needs_php
 def test_python_accepts_the_php_editor_pass(tmp_path):
-    _, source = connector.render("wordpress", SECRET)
+    [(_, source)] = connector.render("wordpress", SECRET)
     editor = source.split("Editor pass", 1)[1]
     funcs = editor[editor.index("function aegis_editor_pass"):editor.index("function aegis_editor_cookie")]
     expires = int(time.time()) + 7200
@@ -131,7 +132,7 @@ def _free_port():
 @needs_php
 def test_locked_site_answers_only_through_aegis(tmp_path):
     """A real PHP server with the connector: Aegis gets through and passes the visitor's IP; a direct hit gets 403."""
-    name, source = connector.render("generic", SECRET, "enforce")
+    [(name, source)] = connector.render("generic", SECRET, "enforce")
     (tmp_path / name).write_text(source)
     (tmp_path / "index.php").write_text("<?php define('AEGIS_TRUST_LOCAL', false); require __DIR__ . '/" + name +
                                         "'; echo 'shop:' . $_SERVER['REMOTE_ADDR'];")
