@@ -36,6 +36,7 @@ HELP = """<b>{brand}</b>
 /pause <i>сайт</i> — выключить блокировки (атаки продолжат записываться)
 /resume <i>сайт</i> — включить блокировки сейчас (и закончить обучение)
 /unban <i>IP</i> [сайт] — снять блокировку с адреса
+/siege <i>сайт</i> [off] — режим осады: посетители проходят быструю проверку браузера, боты нет
 /id — номер этого чата"""
 
 
@@ -196,6 +197,18 @@ class Bot:
                 return (f"<b>{esc(site.domain)}</b>: блокировки выключены. Атаки продолжают записываться.\n"
                         f"Включить обратно: /resume {esc(site.domain)}")
             return f"<b>{esc(site.domain)}</b>: {esc(updated.status_ru())}."
+        if cmd == "/siege":
+            site = self._pick(chat, args[0] if args else None)
+            if site is None:
+                return "Укажите сайт: /siege shop.kz (выключить: /siege shop.kz off)"
+            if len(args) > 1 and args[1].lower() in ("off", "выкл", "stop"):
+                lifted = self.edge.gateway.lift_siege(site.domain)
+                return (f"<b>{esc(site.domain)}</b>: режим осады выключен." if lifted
+                        else f"<b>{esc(site.domain)}</b>: режим осады и так выключен.")
+            self.edge.gateway.siege(site.domain, 60, "включён вручную")
+            return (f"<b>{esc(site.domain)}</b>: режим осады на час. Люди проходят проверку браузера за пару "
+                    f"секунд, боты без браузера — нет. Платёжные уведомления и обмен с 1С идут без проверки.\n"
+                    f"Выключить: /siege {esc(site.domain)} off")
         if cmd == "/unban":
             if not args:
                 return "Укажите адрес: /unban 203.0.113.7"
@@ -230,11 +243,24 @@ class Bot:
             return None
         return "Не знаю такой команды. /help"
 
+    def siege_alert(self, spec, on: bool, reason: str) -> None:
+        site = self.edge.site(spec.name)
+        if site is None:
+            return
+        if on:
+            text = (f"<b>{esc(site.domain)}</b>: включён режим осады ({esc(reason)}). Посетители проходят быструю "
+                    f"проверку браузера, боты без браузера отсекаются. Выключить: /siege {esc(site.domain)} off")
+        else:
+            text = f"<b>{esc(site.domain)}</b>: режим осады закончился, сайт работает как обычно."
+        for chat in {*self.edge.settings.owner_chats, *site.chats}:
+            self.send(chat, text)
+
     def status_text(self, site) -> str:
         today = self.edge.stats.day(site.domain, date.today().isoformat())
         top = sorted(today["by_type"].items(), key=lambda kv: -kv[1])[:3]
         kinds = ", ".join(f"{REASONS_RU.get(k, k)} — {v}" for k, v in top) or "атак не было"
-        return (f"<b>{esc(site.domain)}</b>: {esc(site.status_ru())}\n"
+        siege = "\nРежим осады включён" if self.edge.gateway.siege_active(site.domain) else ""
+        return (f"<b>{esc(site.domain)}</b>: {esc(site.status_ru())}{siege}\n"
                 f"Сегодня: {today['requests']} запросов, остановлено {today['blocked']} из {today['attacks']} атак\n"
                 f"{esc(kinds)}")
 

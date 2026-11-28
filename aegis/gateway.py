@@ -34,6 +34,7 @@ from .models import Incident
 from .proxy import Origin, Proxy
 from .shield import AegisShield, ShieldConfig
 from .shield.core import ShieldCore
+from .shield.gate import Gate
 from .shield.immunity import SharedBans
 
 _request = threading.local()  # set by the shield callback when the current request is an incident
@@ -123,6 +124,12 @@ class Gateway:
         if shared_bans is True:
             shared_bans = SharedBans(Path(log_dir) / "bans.json" if log_dir else None)
         self.shared_bans = shared_bans or None
+        # Siege mode (shield/gate.py): a proof-of-work gate per app, on by hand or when traffic explodes.
+        self.gates: dict[str, Gate] = {}
+        self.siege_until: dict[str, float] = {}
+        self.siege_reason: dict[str, str] = {}
+        self.on_siege: Callable[[AppSpec, bool, str], None] | None = None
+        self._minute: dict[str, list] = {}
         # The dashboard shows attack payloads and patches of your source code. Without a token it is
         # served to this machine only; with one, to whoever presents the token.
         self.dashboard_token = dashboard_token
@@ -234,11 +241,70 @@ class Gateway:
         spec, shield = entry
         with self._lock:
             self.requests[spec.name] += 1
+        if self._siege_check(spec):
+            gate = self.gates.get(spec.name)
+            if gate is not None:
+                client = shield.core.client_ip(environ.get("REMOTE_ADDR", ""), environ.get("HTTP_X_FORWARDED_FOR"))
+                answered = gate(environ, start_response, client)
+                if answered is not None:
+                    return answered
         _request.incident = None
         try:
             return shield(environ, start_response)
         finally:
             _request.incident = None
+
+    # ------------------------------------------------------------ siege --
+    def siege(self, name: str, minutes: float = 30, reason: str = "manual") -> bool:
+        """Turn the proof-of-work gate on for an app. False if there is no such app."""
+        spec = next((a for a in self.apps if a.name == name), None)
+        if spec is None:
+            return False
+        if name not in self.gates:
+            # Derived from the site's secret, so passes survive a restart; random for apps without one.
+            secret = (hmac.new(spec.origin_secret.encode(), f"gate|{name}".encode(), "sha256").hexdigest()
+                      if spec.origin_secret else None)
+            self.gates[name] = Gate(secret, bits=int(spec.options.get("siege_bits", 16)),
+                                    preset=spec.options.get("preset"),
+                                    exempt=spec.options.get("siege_exempt", ()))
+        was = self.siege_active(name)
+        self.siege_until[name] = time.time() + minutes * 60
+        self.siege_reason[name] = reason
+        if not was and self.on_siege:
+            self.on_siege(spec, True, reason)
+        return True
+
+    def lift_siege(self, name: str) -> bool:
+        was = self.siege_active(name)
+        self.siege_until.pop(name, None)
+        spec = next((a for a in self.apps if a.name == name), None)
+        if was and spec is not None and self.on_siege:
+            self.on_siege(spec, False, "manual")
+        return was
+
+    def siege_active(self, name: str) -> bool:
+        return self.siege_until.get(name, 0) > time.time()
+
+    def _siege_check(self, spec: AppSpec) -> bool:
+        """Is the gate on for this app? Also counts requests per minute and starts a siege on a flood."""
+        threshold = int(spec.options.get("siege_auto", 0) or 0)
+        now = time.time()
+        if threshold:
+            with self._lock:
+                window = self._minute.get(spec.name)
+                if window is None or now - window[0] >= 60:
+                    window = self._minute[spec.name] = [now, 0]
+                window[1] += 1
+                count = window[1]
+            if count == threshold + 1 and not self.siege_active(spec.name):
+                self.siege(spec.name, 30, f"более {threshold} запросов в минуту")
+        until = self.siege_until.get(spec.name)
+        if until and until <= now:
+            self.siege_until.pop(spec.name, None)
+            if self.on_siege:
+                self.on_siege(spec, False, "timeout")
+            return False
+        return bool(until)
 
     def _service(self, path: str, environ, start_response):
         """Local endpoints for the server's own tools: Caddy's on-demand TLS check and a health probe."""

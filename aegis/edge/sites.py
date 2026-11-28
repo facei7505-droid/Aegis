@@ -55,6 +55,7 @@ class Site:
     secret: str = ""                          # signs requests to the origin (origin lock, editor passes)
     connector: bool = False                   # the site runs the Aegis connector: editors are known by its
                                               # signed pass, not by a cookie name anyone can send
+    siege_auto: int = 1800                    # requests a minute that start siege mode by themselves (0 = never)
 
     def __post_init__(self):
         self.domain = normalize_domain(self.domain)
@@ -87,7 +88,8 @@ class Site:
 
     def to_spec(self, today: date | None = None) -> AppSpec:
         options = {"preset": self.cms, "rate_limit": self.rate_limit, "login_limit": self.login_limit,
-                   "trust_proxy": True, "proxy_hops": 1, "ban_after": 5, "ban_seconds": 900.0}
+                   "trust_proxy": True, "proxy_hops": 1, "ban_after": 5, "ban_seconds": 900.0,
+                   "siege_auto": self.siege_auto}
         if self.connector and self.secret:
             options["editor_secret"] = self.secret
         return AppSpec(

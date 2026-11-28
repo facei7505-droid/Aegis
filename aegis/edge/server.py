@@ -69,6 +69,7 @@ class Edge:
             from .telegram import Bot
             self.bot = Bot(self, api=telegram_api)
             self.gateway.on_incident.append(self.bot.alert)
+            self.gateway.on_siege = self.bot.siege_alert
         self.reload(force=True)
 
     # ------------------------------------------------------------ sites --
