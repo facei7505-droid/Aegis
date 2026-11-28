@@ -105,7 +105,8 @@ class Command:
     def set(self, name: str, rtype: str, content: str) -> None:
         env = {**os.environ, "AEGIS_DNS_NAME": name, "AEGIS_DNS_TYPE": rtype, "AEGIS_DNS_CONTENT": content,
                "AEGIS_DNS_TTL": str(RECORD_TTL)}
-        subprocess.run(self.command, shell=True, env=env, check=True, timeout=60)
+        # The owner's own command from the watchdog config; record values travel in the environment only.
+        subprocess.run(self.command, shell=True, env=env, check=True, timeout=60)  # aegis: ignore[AEG002]
 
 
 def provider_from(config: dict):

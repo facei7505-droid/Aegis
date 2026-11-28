@@ -144,11 +144,15 @@ class Bot:
                     f"запросы к странице работают.\nРазработчику: передавать «{esc(inc.param)}» в SQL только через "
                     f"подготовленные запросы (prepared statements) или приводить к числу.\nОткуда: {esc(inc.client)}")
         elif inc.attack_type == "exploit_confirmed":
-            head = f"🚨 <b>{esc(domain)}</b>: атака удалась бы — ответ сайта перехвачен"
             what_leaked = "системный файл сервера" if "system_file" in inc.signals else "веб-шелл (бэкдор)"
-            body = (f"Сайт попытался отдать {what_leaked} по адресу <code>{esc(inc.path[:120])}</code>. Aegis заменил "
-                    f"ответ и заблокировал адрес {esc(inc.client)}.\nСрочно: проверьте этот файл на сервере и "
-                    f"смените пароли хостинга и админки.")
+            if inc.blocked:
+                head = f"🚨 <b>{esc(domain)}</b>: атака удалась бы — ответ сайта перехвачен"
+                done = f"Сайт попытался отдать {what_leaked}. Aegis заменил ответ"
+            else:
+                head = f"🚨 <b>{esc(domain)}</b>: сайт отдал {what_leaked}"
+                done = "Ответ уже ушёл (страница без параметров или большая). Aegis заблокировал адрес"
+            body = (f"{done} — адрес {esc(inc.client)} заблокирован. Страница: <code>{esc(inc.path[:120])}</code>"
+                    f"\nСрочно: проверьте этот файл на сервере и смените пароли хостинга и админки.")
         elif inc.attack_type == "data_leak":
             head = f"<b>{esc(domain)}</b>: сайт показывает посетителям технические ошибки"
             detail = inc.signals[1] if len(inc.signals) > 1 else ""

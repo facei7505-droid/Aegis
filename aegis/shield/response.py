@@ -66,7 +66,7 @@ def web_shell(text: str) -> str | None:
     global _SHELLS
     if _SHELLS is None:
         _SHELLS = _shell_titles()
-    head = text[:65536]
+    head = text[:32768]  # a web shell's page is small; its marks are near the top
     return next((s for s in _SHELLS if s in head), None)
 
 
@@ -98,18 +98,40 @@ class Finding:
     block: bool         # replace the answer
 
 
+# Cheap literal hints in front of the patterns: a 300 KB shop page is scanned in about a millisecond
+# instead of tens (the patterns run only around a hint).
+SQL_HINTS = ("sql", "syntax", "ora-", "odbc", "ole db", "column count", "query error", "database error",
+             "pg_query(", "pg_exec(", "unterminated", "supplied argument", "warning</b>")
+SYSTEM_HINTS = ("root:", "uid=", "[boot loader]", "16-bit app")
+PHP_HINTS = ("error", "warning", "notice", "deprecated", "uncaught")
+
+
+def _around(text: str, low: str, hints, pattern: re.Pattern, before: int = 300, after: int = 400):
+    for hint in hints:
+        start = low.find(hint)
+        checked = 0
+        while start != -1 and checked < 20:
+            found = pattern.search(text, max(0, start - before), start + after)
+            if found:
+                return found
+            start = low.find(hint, start + after)
+            checked += 1
+    return None
+
+
 def examine(text: str, request_fields: dict[str, str]) -> Finding | None:
-    found = SYSTEM_FILES.search(text)
+    low = text.lower()
+    found = _around(text, low, SYSTEM_HINTS, SYSTEM_FILES)
     if found:
         return Finding("system_file", found.group(0)[:80], [], True)
     shell = web_shell(text)
     if shell:
         return Finding("web_shell", shell[:80], [], True)
-    found = SQL_ERRORS.search(text)
+    found = _around(text, low, SQL_HINTS, SQL_ERRORS)
     if found:
         fields = [name for name, value in request_fields.items() if SQL_SYNTAX.search(value or "")]
         return Finding("sql_error", found.group(0)[:80], fields, bool(fields))
-    found = PHP_ERRORS.search(text)
+    found = _around(text, low, PHP_HINTS, PHP_ERRORS, before=40, after=700)
     if found:
         return Finding("php_error", re.sub(r"<[^>]+>", "", found.group(0))[:120], [], False)
     return None

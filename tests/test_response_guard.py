@@ -138,12 +138,14 @@ def test_leaked_system_file_is_replaced(shop_gateway):
 
 def test_php_warnings_are_reported_not_blocked(shop_gateway):
     gw, get = shop_gateway
-    status, body = get("/cart")
+    status, body = get("/cart")                                   # no fields: streamed, read afterwards
     assert status == 200 and gzip.decompress(body).endswith(b"cart</html>")
+    gw.shields["shop"].app.guard.drain()
     inc = gw.shields["shop"].core.incidents[-1]
     assert inc.attack_type == "data_leak" and not inc.blocked
     count = len(gw.shields["shop"].core.incidents)
     get("/cart")
+    gw.shields["shop"].app.guard.drain()
     assert len(gw.shields["shop"].core.incidents) == count       # one report per page and hour
 
 
@@ -151,6 +153,7 @@ def test_streamed_answers_are_read_on_the_way(shop_gateway):
     gw, get = shop_gateway
     status, body = get("/report?id=1%27")
     assert status == 200                                          # already on its way: cannot be stopped...
+    gw.shields["shop"].app.guard.drain()
     inc = gw.shields["shop"].core.incidents[-1]                   # ...but the field is closed for next time
     assert inc.attack_type == "injection_point"
     assert get("/report?id=2%27")[0] == 403
@@ -162,3 +165,13 @@ def test_origin_never_gets_brotli(shop_gateway):
     headers = proxy.request_headers({"HTTP_HOST": "shop.kz", "HTTP_ACCEPT_ENCODING": "gzip, deflate, br, zstd",
                                      "REMOTE_ADDR": "127.0.0.1"})
     assert headers["Accept-Encoding"] == "gzip, deflate"
+
+
+def test_pages_without_fields_stream_and_are_read_later(shop_gateway):
+    gw, get = shop_gateway
+    guard = gw.shields["shop"].app.guard
+    assert guard.inline({}, "/product?id=1", None) and guard.inline({"RAW_URI": "/a/..%2f..%2fetc"}, "/a", None)
+    assert not guard.inline({"PATH_INFO": "/catalog/"}, "/catalog/", None)
+    status, _ = get("/download")                                  # no fields, still a leaked system file
+    guard.drain()
+    assert status == 200 and gw.shields["shop"].core.incidents[-1].attack_type == "exploit_confirmed"

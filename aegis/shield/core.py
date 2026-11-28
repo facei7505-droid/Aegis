@@ -279,7 +279,8 @@ class ShieldCore:
                                retry_after=int(cfg.login_lockout)) if block else None
         return None
 
-    def report_response(self, finding, client: str, method: str, path: str, fields: dict[str, str]):
+    def report_response(self, finding, client: str, method: str, path: str, fields: dict[str, str],
+                        replaced: bool = True):
         """The origin's answer showed a leak or a working attack (response.py). Returns the incident."""
         from .policy import normalize_path
         now = time.time()
@@ -299,9 +300,9 @@ class ShieldCore:
             attack, signals, value, param = "data_leak", [kind, finding.evidence], finding.evidence, kind
         det = Detection(attack, 1.0, signals, value, "response", param, {attack: 1.0})
         strike = attack in ("injection_point", "exploit_confirmed")
-        blocked = finding.block and self.config.mode == "block"
+        blocked = finding.block and self.config.mode == "block" and replaced
         incident = self._incident(det, client, method, path, now, 0.0, strike=strike, blocked=blocked).incident
-        if attack == "exploit_confirmed" and blocked and self.config.ban_seconds:
+        if attack == "exploit_confirmed" and self.config.mode == "block" and self.config.ban_seconds:
             until = now + self.config.ban_seconds  # an attack that worked: no second try
             with self._lock:
                 self._banned[client] = until

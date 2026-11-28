@@ -60,13 +60,39 @@ class AppSpec:
 
 # ------------------------------------------------------------------ proxy --
 
-def response_guard(core: ShieldCore) -> Callable:
-    """The proxy's response hook for one app: leaks and confirmed attacks in the origin's answers."""
-    from .shield.core import Verdict, block_response
-    from .shield.response import decode, examine, request_fields
-    seen: dict[tuple[str, str], float] = {}  # (kind, page) -> last report: an error on every page is one alert
+class ResponseGuard:
+    """The proxy's response hook for one app: leaks and confirmed attacks in the origin's answers.
 
-    def guard(environ, target, headers, body, status, data, encoding, complete):
+    Only answers to requests that could carry an attack (fields, or an odd path) are read before they
+    are sent, because only those may have to be stopped. Every other text answer streams at full speed
+    and is read afterwards on a background thread, for alerts (errors on display, a web shell)."""
+
+    QUEUE = 200
+
+    def __init__(self, core: ShieldCore):
+        self.core = core
+        self.seen: dict[tuple[str, str], float] = {}  # (kind, page) -> last report: one alert per page and hour
+        self._jobs: deque = deque()
+        self._wake = threading.Event()
+        self._worker: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def inline(environ, target: str, body: bytes | None) -> bool:
+        if body or "?" in target:
+            return True
+        raw = environ.get("RAW_URI") or environ.get("PATH_INFO", "")
+        return any(mark in raw.lower() for mark in ("..", "%2e", "%2f", "%5c", "\\"))
+
+    def __call__(self, environ, target, headers, body, status, data, encoding, complete):
+        if not complete:  # already sent: read it later, off the request thread
+            self._later((dict(environ), target, headers, body, status, data, encoding))
+            return None
+        return self._examine(environ, target, headers, body, status, data, encoding, complete)
+
+    def _examine(self, environ, target, headers, body, status, data, encoding, complete):
+        from .shield.core import Verdict, block_response
+        from .shield.response import decode, examine, request_fields
         text = decode(data, encoding)
         if not text:
             return None
@@ -77,20 +103,58 @@ def response_guard(core: ShieldCore) -> Callable:
         page = target.split("?")[0]
         if not finding.block:
             now = time.time()
-            if now - seen.get((finding.kind, page), 0) < 3600:
-                return None
-            if len(seen) > 5000:
-                seen.clear()
-            seen[(finding.kind, page)] = now
+            with self._lock:
+                if now - self.seen.get((finding.kind, page), 0) < 3600:
+                    return None
+                if len(self.seen) > 5000:
+                    self.seen.clear()
+                self.seen[(finding.kind, page)] = now
         client = environ.get("aegis.client_ip") or environ.get("REMOTE_ADDR", "")
-        incident = core.report_response(finding, client, environ.get("REQUEST_METHOD", "GET"), page, fields)
+        incident = self.core.report_response(finding, client, environ.get("REQUEST_METHOD", "GET"), page, fields,
+                                             replaced=complete)
         if not (complete and incident.blocked):
             return None
         ctype, payload = block_response(Verdict(True, incident), environ.get("HTTP_ACCEPT", ""))
         return "403 Forbidden", [("Content-Type", ctype), ("Content-Length", str(len(payload))),
                                  ("Cache-Control", "no-store")], payload
 
-    return guard
+    def _later(self, job) -> None:
+        with self._lock:
+            if len(self._jobs) >= self.QUEUE:  # under a flood, skip reading answers rather than fall behind
+                return
+            self._jobs.append(job)
+            if self._worker is None:
+                self._worker = threading.Thread(target=self._work, name="aegis-response-guard", daemon=True)
+                self._worker.start()
+        self._wake.set()
+
+    def _work(self) -> None:
+        while True:
+            self._wake.wait(30)
+            self._wake.clear()
+            while True:
+                with self._lock:
+                    if not self._jobs:
+                        break
+                    job = self._jobs.popleft()
+                try:
+                    self._examine(*job, False)
+                except Exception:
+                    pass
+
+    def drain(self, timeout: float = 5.0) -> None:
+        """Wait until queued answers are read (tests)."""
+        end = time.time() + timeout
+        while time.time() < end:
+            with self._lock:
+                if not self._jobs:
+                    break
+            time.sleep(0.01)
+        time.sleep(0.05)
+
+
+def response_guard(core: ShieldCore) -> ResponseGuard:
+    return ResponseGuard(core)
 
 
 def make_proxy(spec: AppSpec, recorder: TrafficRecorder | None = None, guard: Callable | None = None) -> Proxy:

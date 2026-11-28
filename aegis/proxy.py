@@ -206,16 +206,19 @@ class Proxy:
         known = size is not None and size.isdigit()
         encoding = resp.getheader("Content-Encoding") or ""
         textual = self.guard is not None and _textual(resp.getheader("Content-Type"), encoding)
-        if (self.on_response is not None or textual) and known and int(size) <= KEEP_FOR_REPLAY:
+        inline = textual and getattr(self.guard, "inline", lambda *a: True)(environ, target, body)
+        if (self.on_response is not None or inline) and known and int(size) <= KEEP_FOR_REPLAY:
             data = resp.read()
             conn.close()
             self._report(environ, target, headers, body, resp.status, data)
-            if textual:
+            if inline:
                 replacement = self._guard(environ, target, headers, body, resp.status, data, encoding, True)
                 if replacement is not None:
                     status_line, replaced_headers, page = replacement
                     start_response(status_line, replaced_headers)
                     return [page]
+            elif textual:  # nothing to stop here: read it later, for alerts
+                self._guard(environ, target, headers, body, resp.status, data, encoding, False)
             out.append(("Content-Length", str(len(data))))
             start_response(f"{resp.status} {resp.reason}", out)
             return [data]
