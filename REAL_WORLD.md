@@ -199,6 +199,10 @@ in the SQL console; the PHP command line; order and user filters; clearing the c
 | 400 page requests in a minute from one address | 300 served, 100 refused with 429 |
 | SecLists in search and the catalogue filter: XSS / commands / LFI / SQLi | 110/110, 150/150, 133/150, 106/150 |
 
+**Speed.** Added latency through Aegis (median of 35, origin on the same machine): home page (287 KB)
+120 -> 132 ms, catalogue 54 -> 57 ms, search 67 -> 78 ms, static JS +1 ms. Answers to requests with fields
+are read before they are sent (they may have to be stopped); other pages stream and are read afterwards.
+
 **Not covered:** these are scripted sessions on one machine, not production traffic. The editor pass
 treats administrators and users with write access to the iblock or fileman modules as editors; other
 Bitrix roles have not been tried.

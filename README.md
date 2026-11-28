@@ -41,6 +41,7 @@ What a protected site gets:
 | Request straight to the site's server, around Aegis | 403 from the connector | 403 from the connector |
 | SecLists XSS / commands / LFI / SQLi | 100% / 100% / 89% / 71% | 100% / 100% / 89% / 71% |
 | Password guessing | 429 after 10 tries, site stays open | 429 after 10 tries, site stays open |
+| Added latency, median: page / search / static file | +2.9 / +1.2 / +1.2 ms | +4 to +12 / +11 / +1 ms (287 KB home page: +12) |
 
 ```bash
 aegis check shop.kz --pdf shop.pdf                 # passive check to show a prospective client
