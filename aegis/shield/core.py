@@ -22,6 +22,18 @@ from .detectors import Detection, analyze
 
 MAX_BODY = 1024 * 1024
 RELAXED_PARAMS = {"password", "passwd", "pwd", "pass", "new_password", "current_password", "csrf_token", "token"}
+CHARGE_MS = 10.0  # inspection time worth one page view in the rate limit
+_WARM = threading.Event()
+
+
+def _warm_up() -> None:
+    """Compile the big patterns (CRS tries) and load libinjection when the shield starts, not on the first
+    visitor's request."""
+    if not _WARM.is_set():
+        _WARM.set()
+        analyze([("query", "q", "x' or 1=1 -- /etc/passwd ;/bin/ls <a onclick=x>")], 1.0)
+        from . import crs
+        crs.restricted_path("/.env")
 PHP_NAMED = ("query", "form", "multipart", "cookie")  # PHP renames these fields; JSON keys stay as sent
 SCANNED_HEADERS = {"user-agent", "referer", "x-forwarded-host", "x-original-url", "x-rewrite-url"}
 
@@ -95,6 +107,7 @@ class ShieldCore:
         self._locked: dict[str, float] = {}             # client -> login lockout end
         from .response import LearnedPatches
         self.learned = LearnedPatches(self.config.learned_path)
+        _warm_up()
         self.profile = None
         if self.config.learn or self.config.profile_path:
             from .profile import TrafficProfile
@@ -227,11 +240,21 @@ class ShieldCore:
         if det is None and self.profile is not None:
             det = self._profile(path, inputs)
         detect_ms = (time.perf_counter() - t0) * 1000
+        if cfg.rate_limit and detect_ms > CHARGE_MS:
+            self._charge(client, now, detect_ms)
         if det is None:
             return Verdict(False)
         return self._incident(det, client, method, path, now, detect_ms)
 
     # ----------------------------------------------------------- limits --
+    def _charge(self, client: str, now: float, detect_ms: float) -> None:
+        """Expensive inspection counts toward the rate limit: every CHARGE_MS of it is one more page. A page
+        takes well under a millisecond; 64 KB built to be slow takes a few hundred, so such requests run
+        into the limit after a handful instead of costing a CPU core per attacker."""
+        with self._lock:
+            window = self._rate.get(client)
+            if window is not None and now - window[0] < 60:
+                window[1] += detect_ms / CHARGE_MS
     def _limits(self, req, client: str, now: float, static) -> Verdict | None:
         """Login lockouts and request-rate limits. Both answer 429 and never ban the whole address."""
         cfg = self.config

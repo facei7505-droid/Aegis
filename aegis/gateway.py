@@ -60,6 +60,28 @@ class AppSpec:
 
 
 REFUSED_METHODS = {"TRACE", "TRACK", "CONNECT", "DEBUG"}
+MAX_PER_CLIENT = 48  # requests in flight from one visitor address (a browser opens about six)
+
+
+class _Counted:
+    """A response body that tells the gateway when it is done (sent, or the visitor went away)."""
+
+    def __init__(self, body, release, client: str):
+        self._body, self._release, self._client, self._done = body, release, client, False
+
+    def __iter__(self):
+        return iter(self._body)
+
+    def close(self):
+        if self._done:
+            return
+        self._done = True
+        try:
+            close = getattr(self._body, "close", None)
+            if close is not None:
+                close()
+        finally:
+            self._release(self._client)
 
 # ------------------------------------------------------------------ proxy --
 
@@ -207,6 +229,7 @@ class Gateway:
         self.events: deque = deque(maxlen=500)
         self.on_healed = on_healed
         self._lock = threading.Lock()
+        self._inflight: dict[str, int] = {}  # visitor address -> requests being served
         self._seen_records: dict[str, int] = {}
         self.started = time.time()
         self.requests: dict[str, int] = {a.name: 0 for a in apps}
@@ -311,20 +334,41 @@ class Gateway:
                 return self._api(environ, start_response)
             return self._dashboard(environ, start_response)
         spec, shield = entry
+        client = shield.core.client_ip(environ.get("REMOTE_ADDR", ""), environ.get("HTTP_X_FORWARDED_FOR"))
         with self._lock:
             self.requests[spec.name] += 1
-        if self._siege_check(spec, environ):
-            gate = self.gates.get(spec.name)
-            if gate is not None:
-                client = shield.core.client_ip(environ.get("REMOTE_ADDR", ""), environ.get("HTTP_X_FORWARDED_FOR"))
-                answered = gate(environ, start_response, client)
-                if answered is not None:
-                    return answered
-        _request.incident = None
+            busy = self._inflight.get(client, 0)
+            if busy < MAX_PER_CLIENT:
+                self._inflight[client] = busy + 1
+        if busy >= MAX_PER_CLIENT:
+            # One address holding dozens of slow requests open would starve everyone else of server threads
+            # (and make the failover watchdog think Aegis is dead): it waits its turn instead.
+            start_response("429 Too Many Requests", [("Retry-After", "5"), ("Content-Length", "0"),
+                                                     ("Cache-Control", "no-store")])
+            return [b""]
         try:
-            return shield(environ, start_response)
-        finally:
+            if self._siege_check(spec, environ):
+                gate = self.gates.get(spec.name)
+                if gate is not None:
+                    answered = gate(environ, start_response, client)
+                    if answered is not None:
+                        return _Counted(answered, self._release, client)
             _request.incident = None
+            try:
+                return _Counted(shield(environ, start_response), self._release, client)
+            finally:
+                _request.incident = None
+        except BaseException:
+            self._release(client)
+            raise
+
+    def _release(self, client: str) -> None:
+        with self._lock:
+            left = self._inflight.get(client, 1) - 1
+            if left > 0:
+                self._inflight[client] = left
+            else:
+                self._inflight.pop(client, None)
 
     # ------------------------------------------------------------ siege --
     def siege(self, name: str, minutes: float = 30, reason: str = "manual") -> bool:

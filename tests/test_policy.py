@@ -315,3 +315,13 @@ def test_php_reads_the_last_of_repeated_fields():
     inputs = [("query", "route", "catalog/product"), ("query", "route", "tool/backup")]
     assert Request.build("GET", "/admin/index.php", inputs).params["route"] == "catalog/product"
     assert Request.build("GET", "/admin/index.php", inputs, last=True).params["route"] == "tool/backup"
+
+
+def test_expensive_requests_count_toward_the_rate_limit(monkeypatch):
+    """64 KB made to be slow to inspect: a handful per minute, not hundreds."""
+    monkeypatch.setattr(core_mod.time, "time", lambda: 2_000_000.0)
+    core = shield(preset="generic", rate_limit=300)
+    heavy = ("x=" + " or ''" * 10_900).encode()
+    verdicts = [check(core, "POST", "/search", heavy, "application/x-www-form-urlencoded") for _ in range(60)]
+    assert any(v.status == 429 for v in verdicts)
+    assert all(not check(core, "GET", "/", client="203.0.113.99").blocked for _ in range(5))  # others unaffected

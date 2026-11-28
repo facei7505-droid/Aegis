@@ -352,9 +352,25 @@ def test_bypasses_found_in_review_are_detected(payload):
     "Order (2 items) #4521", "Tried it; update: works now", "Hello,\nNet amount is 50 000 KZT", "Name | ID | Email",
     "Hi {{first_name}}, your order has shipped", "I like dogs; cat people too", "2 < 3 and 5 > 4",
     "https://example.com/page?id=5&sort=asc", 'He said "yes" and 2 people left', "(Select a size from the menu)",
+    # round 5: quotes and dashes as people write them, attributes outside a tag
+    'товар "Хит" -- скидка', '"Pro" #1 продаж', "Rock 'n' roll or 'jazz'", "it's or 'that'",
+    "style=color:red", "x onerror=y",
 ])
 def test_false_positives_found_in_review_pass(text):
     assert score_value(text)[1] < 0.8
+
+
+@pytest.mark.parametrize("path", ["/blog/2024/03/error.log-analysis/", "/catalog/perl/lib/",
+                                  "/catalog/dockerfile-poster/"])
+def test_paths_that_only_look_like_restricted_files(path):
+    from aegis.shield.detectors import analyze
+    assert analyze([("path", "path", path)], 0.8) is None
+
+
+def test_server_side_includes():
+    from aegis.shield.detectors import analyze
+    for payload in ('<!--#include file="secret" -->', '"><!--#EXEC cmd="dir "--><'):
+        assert analyze([("query", "q", payload)], 0.8).attack_type == "command_injection"
 
 
 def test_local_referer_is_not_ssrf():

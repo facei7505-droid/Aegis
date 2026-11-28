@@ -136,4 +136,6 @@ class Edge:
             self.bot.stop()
         if getattr(self, "guard", None):
             self.guard.stop()
+        if self.gateway.shared_bans is not None:
+            self.gateway.shared_bans.flush()
         self.stats.flush()

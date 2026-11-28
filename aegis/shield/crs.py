@@ -24,7 +24,7 @@ from pathlib import Path
 DATA = Path(__file__).parent / "data" / "crs"
 
 # Entries too generic for a shared service (a route called /sys/ exists in ordinary apps).
-SKIP = {"restricted-files": {"/sys/", "/proc/", "sys/", "proc/"}, "lfi-os-files": {"/tmp/"}}
+SKIP = {"restricted-files": {"/sys/", "/proc/", "sys/", "proc/", "perl/lib", "perl/bin"}, "lfi-os-files": {"/tmp/"}}
 
 SYSTEM_ROOTS = ("etc", "usr", "var", "opt", "proc", "sys", "home", "root", "tmp", "dev", "boot", "lib", "lib64",
                 "bin", "sbin", "srv", "private", "applications", "library", "system", "windows", "winnt",
@@ -69,8 +69,9 @@ def _trie(words: list[str]) -> str:
 class PhraseList:
     """`find(text)` -> the first entry found as a whole word (path-aware boundaries), or None."""
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, word_end: str = r"(?![a-z0-9_])"):
         self.name = name
+        self.word_end = word_end
         self._regex: re.Pattern | None = None
         self._lock = threading.Lock()
 
@@ -88,7 +89,7 @@ class PhraseList:
                     parts = []
                     for (left, right), words in sorted(groups.items()):
                         parts.append((r"(?<![a-z0-9_.\-])" if left else "") + f"(?:{_trie(words)})"
-                                     + (r"(?![a-z0-9_])" if right else ""))
+                                     + (self.word_end if right else ""))
                     self._regex = re.compile("|".join(parts))
         return self._regex
 
@@ -96,7 +97,8 @@ class PhraseList:
         return self._compiled().search(text)
 
 
-RESTRICTED = PhraseList("restricted-files")
+# In a path a name ends where the segment ends: /error.log-analysis/ is a blog post, not /error.log.
+RESTRICTED = PhraseList("restricted-files", word_end=r"(?![a-z0-9_.\-])")
 OS_FILES = PhraseList("lfi-os-files")
 SHELL = PhraseList("unix-shell")
 
@@ -130,7 +132,10 @@ def score(texts, classes: dict[str, float], best: tuple[str, float, list[str]]):
         found = SHELL.find(text)
         if found:
             strong = bool(_SEPARATOR.search(text[:found.start()]))
-            hits.append(("command_injection", 0.85 if strong else 0.5, f"OWASP CRS shell {found.group(0)}"))
+            # A hit inside an absolute path (/bin/ls) is the same evidence the "absolute program path"
+            # signature already weighed: counted twice, a review that mentions /bin/ls would be blocked.
+            if text[found.start() - 1:found.start()] != "/":
+                hits.append(("command_injection", 0.85 if strong else 0.5, f"OWASP CRS shell {found.group(0)}"))
         if hits:
             break
     for attack, weight, signal in hits:

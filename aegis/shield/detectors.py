@@ -56,7 +56,10 @@ SIGNATURES: dict[str, list[tuple[str, re.Pattern, float]]] = {
             r"['\"`)]\s*(or|and|\|\|)\s+((not\s+)?(true|false|null)\b|\d+\s*($|--|#|/\*|\)|;))", _F), 0.9),
         ("numeric tautology", re.compile(r"\b(or|and)\s+(\d+)\s*=\s*\2\b", _F), 0.85),
         ("numeric comparison", re.compile(r"^\s*-?\d+\)*\s+(or|and)\s+\d+\s*(<=|>=|<>|!=|<|>|=)\s*\d+\s*($|--|#|/\*|;|\))", _F), 0.85),
-        ("comment terminator", re.compile(r"['\"`]\s*\)*\s*(--|#|/\*)", _F), 0.85),
+        # The comment ends the value (or only junk follows): `admin'--`, `1' -- -`, `x'#`. A quote, a dash and
+        # more words is how people write: `"Хит" -- скидка`, `"Pro" #1`.
+        ("comment terminator", re.compile(r"['\"`][ \t]{0,20}\){0,8}[ \t]{0,20}(?:--[ \t+\-]{0,20}\Z|#[ \t]{0,20}\Z|"
+                                          r"/\*)", _F), 0.85),
         ("closing paren comment", re.compile(r"\)\s*(--|/\*)", _F), 0.6),
         ("union select", re.compile(r"\bunion\b(\s+(all|distinct))?\s+select\b", _F), 0.95),
         ("subquery", re.compile(r"\(\s*select\b[^)]*\bfrom\b", _F), 0.6),
@@ -124,6 +127,8 @@ SIGNATURES: dict[str, list[tuple[str, re.Pattern, float]]] = {
         ("chained word command", re.compile(_SEP + _HS + r"(" + _WORD_CMDS + r")(?=[ \t]{0,20}($|[;&|`#)\r\n]))", _C), 0.9),
         ("piped word command", re.compile(r"(&|\||`|\$\()" + _HS + r"(" + _WORD_CMDS + r")\b(?![ \t]{0,20}=)", _C), 0.85),
         ("separated word command", re.compile(r"[;\n]" + _HS + r"(" + _WORD_CMDS + r")[ \t](?![ \t]{0,20}=)", _C), 0.75),
+        ("server-side include", re.compile(r"<!--[ \t]{0,20}#[ \t]{0,20}(?:include|exec|echo|config|fsize|flastmod|"
+                                           r"printenv|set|if)\b", _F), 0.95),
         ("absolute program path", re.compile(_SEP + _HS + r"/(usr/)?(local/)?s?bin/\w+", _F), 0.9),
         ("shell flags", re.compile(r"\s-[a-zA-Z]{1,4}(\s|$)", _C), 0.4),
         ("file argument", re.compile(r"\s[\w./-]+\.(txt|conf|cfg|ini|env|log|key|pem|py|sh|db|sqlite|json|ya?ml|xml|php)\b", _F), 0.5),
@@ -297,8 +302,10 @@ def score_all(value: str) -> tuple[str, float, list[str], dict[str, float]]:
 
 
 LIBINJECTION_WEIGHT = 0.9
-ARITHMETIC_WEIGHT = 0.6  # fingerprints of numbers and logic alone ("2 < 3 and 5 > 4" is 1&1, like "1 and 1=1"):
-ARITHMETIC = set("1&o()")  # they block only together with a signature
+WEAK_WEIGHT = 0.6        # these block only together with a signature:
+ARITHMETIC = set("1&o()")  # numbers and logic alone ("2 < 3 and 5 > 4" is 1&1, like "1 and 1=1");
+SHORT_FINGERPRINT = 3      # short fingerprints that ordinary text with quotes produces ("x' or 'y" is s&s,
+                           # "'-'" is sos); the classic tautologies are longer (s&sos, 1UE1)
 
 
 _PLAIN = re.compile(r"[\w.@-]*")  # one bare token: nothing for a SQL or HTML tokenizer to find
@@ -309,13 +316,17 @@ def _second_opinion(texts, classes: dict[str, float], best: tuple[str, float, li
     texts = [t for t in texts if not _PLAIN.fullmatch(t)]
     if not texts:
         return best
-    sqli = next((fp for ok, fp in (libinjection.is_sqli(t) for t in texts) if ok), None)
+    sqli, sqli_text = next(((fp, t) for t in texts for ok, fp in (libinjection.is_sqli(t),) if ok), (None, ""))
     xss = any(libinjection.is_xss(t) for t in texts)
     for attack, hit, signal in (("sqli", sqli is not None, f"libinjection sqli {sqli}"),
                                 ("xss", xss, "libinjection xss")):
         if not hit:
             continue
-        weight = ARITHMETIC_WEIGHT if attack == "sqli" and set(sqli) <= ARITHMETIC else LIBINJECTION_WEIGHT
+        if attack == "sqli":  # a bare probe ('-' or "&") is short; the same fingerprint inside prose is not
+            weak = set(sqli) <= ARITHMETIC or (len(sqli) <= SHORT_FINGERPRINT and len(sqli_text.strip()) > 8)
+        else:  # outside a tag (`style=color:red`, `x onerror=y`) the HTML tokenizer guesses at attributes
+            weak = not any("<" in t for t in texts)
+        weight = WEAK_WEIGHT if weak else LIBINJECTION_WEIGHT
         score = round(1.0 - (1.0 - classes.get(attack, 0.0)) * (1.0 - weight), 3)
         classes[attack] = score
         signals = (best[2] + [signal]) if best[0] == attack else [signal]

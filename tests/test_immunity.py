@@ -67,3 +67,23 @@ def test_gateway_apps_share_bans(tmp_path):
     attack(core_a, "198.51.100.4", times=2)
     assert core_b.inspect("198.51.100.4", "GET", "/", CLEAN).blocked
     assert (tmp_path / "bans.json").is_file()
+
+
+def test_a_broken_bans_file_costs_the_bans_not_the_start(tmp_path):
+    path = tmp_path / "bans.json"
+    path.write_text('{"1.2.3.4": ["soon", "x"], "5.6.7.8": [' + str(time.time() + 600) + ', "a.kz"], "9.9.9.9": 7}')
+    bans = SharedBans(path)
+    assert bans.until("5.6.7.8") > 0 and bans.until("1.2.3.4") == 0.0
+    path.write_text("[1, 2")
+    assert SharedBans(path).active() == {}
+
+
+def test_a_scanner_wave_does_not_rewrite_the_file_per_ban(tmp_path):
+    path = tmp_path / "bans.json"
+    bans = SharedBans(path)
+    t0 = time.time()
+    for i in range(5000):
+        bans.ban(f"10.{i // 256}.{i % 256}.1", time.time() + 600, "a.kz")
+    assert time.time() - t0 < 2.0
+    bans.flush()
+    assert len(SharedBans(path).active()) == 5000

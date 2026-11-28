@@ -6,6 +6,7 @@ import json
 import socket
 import ssl
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -259,3 +260,40 @@ def test_trace_and_connect_are_refused(origin):
     for method in ("TRACE", "TRACK", "CONNECT"):
         resp, _ = through(spec, method=method, path="/")
         assert resp.status == 405
+
+
+def test_one_address_cannot_take_every_server_thread(origin):
+    """Slow requests from one visitor wait their turn: the rest of the world (and the watchdog) still gets in."""
+    import threading as _th
+    import aegis.gateway as gwmod
+    spec = AppSpec("shop", f"http://127.0.0.1:{origin}", ["shop.kz"], preserve_host=True, heal="off",
+                   options={"trust_proxy": True})
+    gw = Gateway([spec])
+    port = free_port()
+    servers = serve(gw, port)
+    held = []
+    try:
+        for _ in range(gwmod.MAX_PER_CLIENT):   # requests that announce a body and never send it
+            sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+            sock.sendall(b"POST / HTTP/1.1\r\nHost: shop.kz\r\nX-Forwarded-For: 203.0.113.66\r\n"
+                         b"Content-Type: application/x-www-form-urlencoded\r\nContent-Length: 100\r\n\r\nx")
+            held.append(sock)
+        deadline = time.time() + 5
+        while time.time() < deadline and gw._inflight.get("203.0.113.66", 0) < gwmod.MAX_PER_CLIENT:
+            time.sleep(0.05)
+
+        def get(client):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn.request("GET", "/", headers={"Host": "shop.kz", "X-Forwarded-For": client})
+            return conn.getresponse().status
+        assert get("203.0.113.66") == 429
+        assert get("198.51.100.20") == 200
+    finally:
+        for sock in held:
+            sock.close()
+        for s in servers:
+            s.shutdown()
+    deadline = time.time() + 40
+    while time.time() < deadline and gw._inflight:
+        time.sleep(0.2)
+    assert gw._inflight == {}   # every slot came back
