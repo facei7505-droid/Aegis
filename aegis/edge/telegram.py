@@ -209,6 +209,9 @@ class Bot:
                 shield = self.edge.shield(site.domain)
                 if shield is not None and shield.core.unlock(ip):
                     freed.append(site.domain)
+            shared = getattr(self.edge.gateway, "shared_bans", None)
+            if shared is not None and len(args) == 1 and chat in self.edge.settings.owner_chats and shared.lift(ip):
+                freed.append("общий бан всех сайтов")
             return (f"Адрес {esc(ip)} разблокирован: {esc(', '.join(freed))}." if freed
                     else f"Адрес {esc(ip)} сейчас нигде не заблокирован.")
         if cmd == "/report":

@@ -72,8 +72,11 @@ class Verdict:
 class ShieldCore:
     def __init__(self, config: ShieldConfig | None = None,
                  on_incident: Iterable[Callable[[Incident], None]] = (),
-                 alerters: Iterable = ()):
+                 alerters: Iterable = (), shared=None, name: str = ""):
         self.config = config or ShieldConfig()
+        self.shared = shared          # immunity.SharedBans: bans from the other sites on this server
+        self.name = name
+        self._pardoned: dict[str, float] = {}  # address -> shared ban this site's owner lifted for this site
         self.callbacks = list(on_incident)
         self.alerters = list(alerters)
         self.incidents: list[Incident] = []
@@ -177,6 +180,11 @@ class ShieldCore:
                 return Verdict(cfg.mode == "block", banned=True)
             if until:
                 del self._banned[client]
+            if self.shared is not None:
+                shared_until = self.shared.until(client, now)
+                if shared_until and self._pardoned.get(client, 0) < shared_until:
+                    self.stats["banned_hits"] += 1
+                    return Verdict(cfg.mode == "block", banned=True)
 
         t0 = time.perf_counter()
         req = None
@@ -266,6 +274,11 @@ class ShieldCore:
             self._rate.pop(client, None)
             self._strikes.pop(client, None)
             self._logins.pop(client, None)
+            if self.shared is not None:
+                shared_until = self.shared.until(client)
+                if shared_until:  # pardoned here; the other sites keep their protection
+                    self._pardoned[client] = shared_until
+                    found = True
         return found
 
     # --------------------------------------------------------- incidents --
@@ -297,6 +310,8 @@ class ShieldCore:
                 if cfg.ban_after and len(strikes) >= cfg.ban_after:
                     self._banned[client] = now + cfg.ban_seconds
                     strikes.clear()
+                    if self.shared is not None and cfg.mode == "block":  # learning sites do not ban others
+                        self.shared.ban(client, now + cfg.ban_seconds, self.name)
         self._log(incident)
         for alerter in self.alerters:
             try:

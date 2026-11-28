@@ -33,6 +33,8 @@ from .healer import Healer
 from .models import Incident
 from .proxy import Origin, Proxy
 from .shield import AegisShield, ShieldConfig
+from .shield.core import ShieldCore
+from .shield.immunity import SharedBans
 
 _request = threading.local()  # set by the shield callback when the current request is an incident
 
@@ -80,8 +82,13 @@ class Gateway:
     """Routes requests to apps; each app is wrapped in its own shield and healer."""
 
     def __init__(self, apps: list[AppSpec], on_healed: Callable[[AppSpec, object], None] | None = None,
-                 log_dir: str | None = None, ai_fixer=None, dashboard_token: str | None = None):
+                 log_dir: str | None = None, ai_fixer=None, dashboard_token: str | None = None,
+                 shared_bans: SharedBans | None | bool = True):
         self.apps = apps
+        # Shared immunity (shield/immunity.py): an address banned on one app is banned on all of them.
+        if shared_bans is True:
+            shared_bans = SharedBans(Path(log_dir) / "bans.json" if log_dir else None)
+        self.shared_bans = shared_bans or None
         # The dashboard shows attack payloads and patches of your source code. Without a token it is
         # served to this machine only; with one, to whoever presents the token.
         self.dashboard_token = dashboard_token
@@ -121,7 +128,8 @@ class Gateway:
         config = ShieldConfig(mode=spec.shield, log_path=log, **options)
         # Only apps that can heal need recorded traffic (the canary); other responses are streamed.
         proxy = make_proxy(spec, recorder if spec.name in self.healers else None)
-        shield = AegisShield(proxy, config, on_incident=callbacks)
+        core = ShieldCore(config, callbacks, shared=self.shared_bans, name=spec.name)
+        shield = AegisShield(proxy, core=core)
         self.shields[spec.name] = shield
         self.requests.setdefault(spec.name, 0)
         entry = (spec, shield)
