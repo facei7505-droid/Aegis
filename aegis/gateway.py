@@ -100,6 +100,7 @@ class ResponseGuard:
         self._jobs: deque = deque()
         self._wake = threading.Event()
         self._worker: threading.Thread | None = None
+        self._busy = False
         self._lock = threading.Lock()
 
     @staticmethod
@@ -164,22 +165,30 @@ class ResponseGuard:
             while True:
                 with self._lock:
                     if not self._jobs:
+                        self._busy = False
                         break
                     job = self._jobs.popleft()
+                    self._busy = True
                 try:
                     self._examine(*job, False)
                 except Exception:
                     pass
 
     def drain(self, timeout: float = 5.0) -> None:
-        """Wait until queued answers are read (tests)."""
+        """Wait until queued answers are read (tests). An answer is queued only after its last byte left,
+        which can be a moment after the client has it: wait for a short quiet spell, not just an empty queue."""
         end = time.time() + timeout
+        quiet_since = None
         while time.time() < end:
             with self._lock:
-                if not self._jobs:
-                    break
+                idle = not self._jobs and not self._busy
+            if not idle:
+                quiet_since = None
+            elif quiet_since is None:
+                quiet_since = time.time()
+            elif time.time() - quiet_since >= 0.25:
+                return
             time.sleep(0.01)
-        time.sleep(0.05)
 
 
 def response_guard(core: ShieldCore) -> ResponseGuard:

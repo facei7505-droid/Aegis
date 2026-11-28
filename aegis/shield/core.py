@@ -241,9 +241,11 @@ class ShieldCore:
         if det is None and self.profile is not None:
             det = self._profile(path, inputs)
         detect_ms = (time.perf_counter() - t0) * 1000
-        cpu_ms = (time.thread_time() - cpu0) * 1000
-        if cfg.rate_limit and cpu_ms > CHARGE_MS:
-            self._charge(client, now, cpu_ms)
+        # The smaller of CPU and wall time: CPU leaves out waits for other threads, and wall time stays exact
+        # where the CPU clock ticks coarsely (Windows counts thread time in 15.6 ms steps).
+        cost_ms = min((time.thread_time() - cpu0) * 1000, detect_ms)
+        if cfg.rate_limit and cost_ms > CHARGE_MS:
+            self._charge(client, now, cost_ms)
         if det is None:
             return Verdict(False)
         return self._incident(det, client, method, path, now, detect_ms)
