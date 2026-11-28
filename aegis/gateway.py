@@ -35,6 +35,7 @@ from .proxy import Origin, Proxy
 from .shield import AegisShield, ShieldConfig
 from .shield.core import ShieldCore
 from .shield.gate import Gate
+from .shield.policy import is_static, normalize_path
 from .shield.immunity import SharedBans
 
 _request = threading.local()  # set by the shield callback when the current request is an incident
@@ -305,7 +306,7 @@ class Gateway:
         spec, shield = entry
         with self._lock:
             self.requests[spec.name] += 1
-        if self._siege_check(spec):
+        if self._siege_check(spec, environ):
             gate = self.gates.get(spec.name)
             if gate is not None:
                 client = shield.core.client_ip(environ.get("REMOTE_ADDR", ""), environ.get("HTTP_X_FORWARDED_FOR"))
@@ -349,11 +350,12 @@ class Gateway:
     def siege_active(self, name: str) -> bool:
         return self.siege_until.get(name, 0) > time.time()
 
-    def _siege_check(self, spec: AppSpec) -> bool:
-        """Is the gate on for this app? Also counts requests per minute and starts a siege on a flood."""
+    def _siege_check(self, spec: AppSpec, environ) -> bool:
+        """Is the gate on for this app? Also counts page requests per minute and starts a siege on a flood.
+        Static files are not counted: one page view pulls dozens of them."""
         threshold = int(spec.options.get("siege_auto", 0) or 0)
         now = time.time()
-        if threshold:
+        if threshold and not is_static(normalize_path(environ.get("PATH_INFO", "/") or "/")):
             with self._lock:
                 window = self._minute.get(spec.name)
                 if window is None or now - window[0] >= 60:

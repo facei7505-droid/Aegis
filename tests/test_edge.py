@@ -107,7 +107,7 @@ def test_registry_is_atomic_and_refuses_duplicates(tmp_path):
 @pytest.fixture
 def edge(tmp_path, shop):
     reg = Registry(tmp_path / "sites.json")
-    reg.add(Site("shop.kz", shop, "wordpress", aliases=["www.shop.kz"], chats=[222], rate_limit=100_000), learn_days=0)
+    reg.add(Site("shop.kz", shop, "wordpress", aliases=["www.shop.kz"], chats=[222], rate_limit=100_000, siege_auto=0), learn_days=0)
     e = Edge(tmp_path)
     port = free_port()
     servers = e.start(port)

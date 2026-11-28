@@ -127,6 +127,9 @@ def test_a_person_passes_the_gate(gateway):
 
 def test_a_flood_starts_the_siege_by_itself(gateway):
     gw, request, events = gateway
+    for _ in range(60):
+        request("GET", "/static/app.css")                     # page assets do not count toward a flood
+    assert not gw.siege_active("shop.kz")
     for _ in range(51):
         request("GET", "/")
     assert gw.siege_active("shop.kz") and events[0][1] is True and "50" in events[0][2]
