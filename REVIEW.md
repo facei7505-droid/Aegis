@@ -77,3 +77,39 @@ Found while fixing #1 (not in the report): `/index.php?rest_route=/wp/v2/users` 
 also enumerated users, and `/wp-login.php/x.css` was counted as a static file by the rate limit.
 All three are closed and tested. The reviewer also checked Telegram authorization, the control
 endpoints, cross-site routing, report escaping, stats paths and payload masking, and found no issue.
+
+## Round 5: outside review of v1.4 (origin lock, response guard, siege, failover, shared immunity)
+
+A fresh reviewer wrote 20 probes against the new features (a real Gateway, PHP 8.3 running the
+connector, an echoing origin). Every finding below was reproduced, fixed, covered by a test, and the
+probes re-run. Then both labs were run again in block mode with the connector: WordPress 21/21 steps
+and Bitrix 17/17, 0 requests refused, and every attack from rounds 4 and the Bitrix lab still refused.
+
+| # | Problem | Severity | Fix | Regression test |
+| --- | --- | --- | --- | --- |
+| 1 | A page that echoes the query ("nothing found for uid=0(root)…") made the response guard ban the searcher, on every site through shared immunity: one link could get a stranger banned everywhere | high | Answers that only repeat the request prove nothing and are ignored; a ban needs the request itself to have asked for the leak; a raw /etc/passwd is still replaced whoever asks | `test_pages_that_show_system_files_are_content`, `test_requester_of_a_leak_gets_no_second_try` |
+| 2 | The same echo poisoned learned injection points ("You have an error in your SQL syntax" typed into a search box closed the search for everyone) | high | Reflected errors ignored; a field is closed only when it is the one field carrying SQL syntax | `test_confirmed_injection_point_is_closed` |
+| 3 | The origin-lock signature covered host and visitor address only: one leaked header (phpinfo shows them) opened any URL, any method, for 5 minutes | high | Signed together with the method and the request URI; a leak reopens only that same request | `test_origin_signature_round_trip`, `test_php_accepts_what_python_signs` |
+| 4 | The failover flag lived in the shared temp folder under a predictable name: another hosting account could create it and open the site; open_basedir printed a PHP warning into every page; an old token reopened the site after Aegis came back | high | Signed state file next to the connector, a .php that prints nothing; fresh tokens that only move forward; the watchdog sends a signed "close" when Aegis returns | `test_failover_opens_a_locked_site` |
+| 5 | PHP files `user.id` and `user[id` under `user_id` and reads the last of repeated fields: a renamed field walked past a closed injection point, a second `route=` rode on an exempt first one through the siege gate | high | PHP sites are judged under PHP's own names, last value wins (checked against PHP 8.3 `parse_str`); exemptions refuse repeated fields | `test_renamed_field_cannot_walk_past_a_learned_injection_point`, `test_server_to_server_paths_skip_the_gate` |
+| 6 | Files that look static were exempt from the siege gate and the rate limit, yet a CMS answers `/any/x.css` with a full dynamic 404 | medium | A file the site answers with 404 counts as a page; under siege files need the pass too | `test_a_flood_of_made_up_files_is_still_a_flood` |
+| 7 | 16-bit proof-of-work: 7 ms for a native bot, then a pass good for unlimited requests for 12 hours | medium | 18 bits (Chrome: ~1 s on a laptop, <4 s at 4x CPU slowdown), 2-hour pass worth 300 page views; documented as a tax on determined bots, not a wall | `test_a_pass_covers_a_budget_of_pages` |
+| 8 | One client could hold every server thread with slow requests, starving visitors and making the failover watchdog switch every site to unprotected direct access | medium | At most 48 requests in flight per visitor address, then 429 | `test_one_address_cannot_take_every_server_thread` |
+| 9 | Shared bans were rewritten to disk on every ban (5,000 bans: 27 s); a malformed bans.json stopped the server from starting | medium | Batched writes (≤ every 5 s, flushed on stop), capped store, bad entries skipped | `test_a_scanner_wave_does_not_rewrite_the_file_per_ban`, `test_a_broken_bans_file_costs_the_bans_not_the_start` |
+| 10 | 64 KB values built to be slow cost up to ~250 ms of CPU each | low | Inspection CPU time counts toward the rate limit (10 ms = one page); patterns compile at start | `test_expensive_requests_count_toward_the_rate_limit` |
+| 11 | Telegram alerts quoted a defaced page's title as HTML: a defacer could inject links or make the alert fail | low | Escaped | `test_guard` suite |
+| 12 | False alarms on everyday text: `"Хит" -- скидка`, `"Pro" #1`, `style=color:red`, `/blog/…/error.log-analysis/`, `/catalog/perl/lib/`, `/bin/ls` counted twice | low | Comment signature needs the comment to end the value; short libinjection fingerprints in prose and its HTML verdict without a tag are weak signals; CRS names end where the path segment ends | `test_false_positives_found_in_review_pass`, `test_paths_that_only_look_like_restricted_files` |
+| 13 | TRACE was forwarded (the origin echoed the request, cookies included) | low | TRACE, TRACK, CONNECT, DEBUG refused with 405 | `test_trace_and_connect_are_refused` |
+| 14 | PHP and Python disagreed on malformed and non-ASCII Host values | low | Same trim set, ASCII-only lowercase on both sides | `test_php_and_python_agree_on_hosts` |
+
+Found while fixing (not in the report): counting every file at a quarter of a page, as first written
+for #6, took the WordPress block editor over the limit (4 of 21 admin steps got 429), and charging
+inspection by wall-clock time charged GIL waits to the visitor. Files are free again unless they 404,
+and the charge uses the thread's CPU time; the same session then peaked at 78 of 300 a minute. Fixing
+#12 first cost CSIC 2010 nine points of detection, because the old comment pattern had been catching
+server-side include attacks by accident; those got their own signature and CSIC is back to 77.3%.
+
+Accepted: during a siege, search crawlers and feed readers get 503 with Retry-After (Google treats a
+short 503 as "come back later"); `/api/…` and webhook paths stay ungated by design; a site behind
+nginx on the same host sees every visitor as local, which `aegis edge connector --verify` now explains
+(`AEGIS_TRUST_LOCAL`).

@@ -1,8 +1,8 @@
 """Siege mode: a proof-of-work gate in front of a site under a bot flood (the idea of Anubis, by Xe Iaso).
 
 When a site is under siege, a visitor without a pass gets a small page whose script finds a number
-`n` such that SHA-256(challenge + n) starts with `bits` zero bits (2^18 tries on average: under a
-second on a laptop, a second or two on a phone). The answer earns a signed cookie for two hours and
+`n` such that SHA-256(challenge + n) starts with `bits` zero bits (2^18 tries on average: measured in
+Chrome, about a second on a laptop and under four seconds with the CPU slowed 4x like a budget phone). The answer earns a signed cookie for two hours and
 PASS_PAGES page views; then the browser solves again, invisibly short. Bots that do not run JavaScript
 never get through. Honest limit: a bot with native SHA-256 solves in tens of milliseconds, so the gate
 taxes a determined attacker rather than stopping one; rate limits and bans still apply behind it.

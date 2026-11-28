@@ -23,9 +23,10 @@ Aegis Edge closes the ways around it, reads the site's answers, and is measured 
   81% -> 92% and 94% -> 98%; quick-SQLi 70% -> 94%; XSS-RSNAKE 72% -> 91%.
 - **Shared immunity.** An address banned on one site is banned on every site of the server for the same
   time; learning sites do not contribute; a client's /unban pardons only their site.
-- **Siege mode.** A proof-of-work gate (the idea of Anubis): visitors pass in about a second, bots
-  without a browser never; payment callbacks, 1C exchange and cron are exempt. Telegram `/siege`, or
-  automatic above 1,800 requests a minute. 0.3 s median in real Chrome on the lab machine.
+- **Siege mode.** A proof-of-work gate (the idea of Anubis): visitors pass in about a second (under four
+  with the CPU slowed 4x like a budget phone), bots without a browser never; payment callbacks, 1C
+  exchange and cron are exempt. Telegram `/siege`, or automatic above 1,800 requests a minute. It taxes a
+  bot that hashes natively rather than stopping it; rate limits and bans still apply behind it.
 - **Site guard.** Every 5 minutes: is the site up, did a script from a new outside domain appear (card
   skimmers), an obfuscated loader, SEO spam, a defacement. First look and learning only record.
 - **Failover.** `aegis edge watchdog` on a second machine: if Aegis stops answering, it opens the
@@ -39,6 +40,13 @@ Aegis Edge closes the ways around it, reads the site's answers, and is measured 
   Aegis (403) instead of WordPress (401); SecLists LFI 84% -> 89%, SQLi 67% -> 71%.
 - **Fixes:** the gateway and test servers no longer do a reverse DNS lookup when binding (stalled CI on
   macOS); visitors never see X-Aegis-* headers.
+- **Outside review, round 5** (REVIEW.md): 14 findings closed before release. The ones that matter most:
+  an echoing search page could get a visitor banned on every site; a leaked origin signature opened any
+  URL for five minutes (now bound to method and URI); the failover flag could be forged on shared
+  hosting; PHP's renaming of `user.id` to `user_id` walked past field rules; one client could exhaust
+  the server's threads (now 48 in flight per address); the siege proof-of-work is 18 bits with a pass
+  worth 300 pages. Both labs re-run afterwards: WordPress 21/21, Bitrix 17/17, 0 refused; CSIC 2010
+  still 0 of 72,000 normal requests flagged.
 
 ## v1.3.0
 

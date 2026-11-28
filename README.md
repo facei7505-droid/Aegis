@@ -28,7 +28,7 @@ What a protected site gets:
 | **Origin lock** | a small PHP connector on the site's server answers only requests signed by Aegis, so the server's real IP is no back door; the CMS sees the visitor's real IP; editors carry a signed pass, so a forged "signed in" cookie relaxes nothing |
 | **Response guard** | reads the site's answers: a database error after a request with SQL syntax is a *confirmed* injection point, and Aegis closes exactly that field on that page and tells the owner what to fix; leaked system files or web-shell output are replaced and the address banned |
 | **Shared immunity** | an address banned for attacking one site is banned on every site of the server |
-| **Siege mode** | under a bot flood, visitors solve a one-second proof-of-work in the browser (idea of Anubis); bots without a browser get nothing. By hand (`/siege`) or automatically |
+| **Siege mode** | under a bot flood, visitors solve a proof-of-work in the browser in about a second (idea of Anubis); bots without a browser get nothing, bots that hash natively pay a tax. By hand (`/siege`) or automatically |
 | **Site guard** | every 5 minutes: is the site up, did a script from a new outside domain appear (card skimmers), obfuscated loaders, SEO spam, defacement |
 | **Failover** | if the Aegis server dies, a watchdog on a second machine points the sites back at their own servers and opens the connectors; sites keep working without protection until Aegis is back |
 

@@ -131,7 +131,9 @@ def test_a_person_passes_the_gate(gateway):
     assert request("GET", "/bitrix/tools/sale_ps_result.php")[0].status == 200       # payment callback
     resp, body = request("POST", "/order/")                                         # a bot posting blind
     assert resp.status == 503 and b"retry" in body
-    resp, _ = request("GET", f"/_aegis/gate?c={challenge}&n=1&r=//evil.example/")   # wrong answer, foreign return
+    wrong = next(k for k in range(1000)                                             # a nonce that does not solve
+                 if leading_zero_bits(hashlib.sha256(f"{challenge}{k}".encode()).digest()) < 8)
+    resp, _ = request("GET", f"/_aegis/gate?c={challenge}&n={wrong}&r=//evil.example/")  # wrong answer, foreign return
     assert resp.status == 303 and resp.getheader("Location") == "/" and resp.getheader("Set-Cookie") is None
     assert gw.lift_siege("shop.kz") and events[-1] == ("shop.kz", False, "manual")
     assert request("GET", "/catalog/")[0].status == 200
