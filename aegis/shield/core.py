@@ -300,7 +300,14 @@ class ShieldCore:
         det = Detection(attack, 1.0, signals, value, "response", param, {attack: 1.0})
         strike = attack in ("injection_point", "exploit_confirmed")
         blocked = finding.block and self.config.mode == "block"
-        return self._incident(det, client, method, path, now, 0.0, strike=strike, blocked=blocked).incident
+        incident = self._incident(det, client, method, path, now, 0.0, strike=strike, blocked=blocked).incident
+        if attack == "exploit_confirmed" and blocked and self.config.ban_seconds:
+            until = now + self.config.ban_seconds  # an attack that worked: no second try
+            with self._lock:
+                self._banned[client] = until
+            if self.shared is not None:
+                self.shared.ban(client, until, self.name)
+        return incident
 
     def unlock(self, client: str) -> bool:
         """Lift every block on an address (ban, login lockout, rate window). True if one was active."""

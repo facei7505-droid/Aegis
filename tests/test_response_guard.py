@@ -132,6 +132,8 @@ def test_leaked_system_file_is_replaced(shop_gateway):
     status, body = get("/download?file=report.pdf")
     assert status == 403 and b"root:x" not in body
     assert gw.shields["shop"].core.incidents[-1].attack_type == "exploit_confirmed"
+    assert get("/")[0] == 403                                    # that address does not get a second try
+    assert get("/", client="203.0.113.77")[0] == 200
 
 
 def test_php_warnings_are_reported_not_blocked(shop_gateway):

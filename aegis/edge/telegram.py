@@ -137,6 +137,24 @@ class Bot:
         elif inc.attack_type == "rate_limit":
             head = f"<b>{esc(domain)}</b>: слишком частые запросы"
             body = f"Адрес {esc(inc.client)} притормозили на минуту."
+        elif inc.attack_type == "injection_point" and inc.location == "response":
+            head = f"🛠 <b>{esc(domain)}</b>: найдена и закрыта уязвимость"
+            body = (f"Поле «{esc(inc.param)}» на странице <code>{esc(inc.path[:120])}</code> выдало ошибку базы данных "
+                    f"на запрос с кавычкой: через него можно добраться до базы. Aegis закрыл это поле, обычные "
+                    f"запросы к странице работают.\nРазработчику: передавать «{esc(inc.param)}» в SQL только через "
+                    f"подготовленные запросы (prepared statements) или приводить к числу.\nОткуда: {esc(inc.client)}")
+        elif inc.attack_type == "exploit_confirmed":
+            head = f"🚨 <b>{esc(domain)}</b>: атака удалась бы — ответ сайта перехвачен"
+            what_leaked = "системный файл сервера" if "system_file" in inc.signals else "веб-шелл (бэкдор)"
+            body = (f"Сайт попытался отдать {what_leaked} по адресу <code>{esc(inc.path[:120])}</code>. Aegis заменил "
+                    f"ответ и заблокировал адрес {esc(inc.client)}.\nСрочно: проверьте этот файл на сервере и "
+                    f"смените пароли хостинга и админки.")
+        elif inc.attack_type == "data_leak":
+            head = f"<b>{esc(domain)}</b>: сайт показывает посетителям технические ошибки"
+            detail = inc.signals[1] if len(inc.signals) > 1 else ""
+            body = (f"Страница <code>{esc(inc.path[:120])}</code>: {esc(detail[:160])}\nОшибки подсказывают "
+                    f"взломщику пути и устройство сайта. Выключите их вывод (PHP: display_errors = Off; Битрикс: "
+                    f"exception_handling debug = false в /bitrix/.settings.php).")
         else:
             verb = "атака заблокирована" if inc.blocked else "атака записана (режим обучения, не блокировалась)"
             head = f"<b>{esc(domain)}</b>: {verb}"
