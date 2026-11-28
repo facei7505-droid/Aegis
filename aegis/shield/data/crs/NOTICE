@@ -1,0 +1,13 @@
+These data files come from the OWASP CRS (Core Rule Set) project, https://github.com/coreruleset/coreruleset,
+commit 8c92792bce182c654ba04e22018710209891d6ea (2026-11-23), directory rules/, unchanged:
+
+  lfi-os-files.data      operating-system files an attacker reads through a file parameter (CRS 930120)
+  restricted-files.data  files a web server should never hand out (CRS 930130)
+  unix-shell.data        shell programs and variables in parameters (CRS 932160)
+  sql-errors.data        database error messages in responses (CRS 951)
+  php-errors.data        PHP error messages in responses (CRS 953)
+  web-shells-php.data    output of known PHP web shells in responses (CRS 955)
+
+Copyright the OWASP CRS project and contributors. Licensed under the Apache License, Version 2.0 (LICENSE in
+this folder). Aegis uses them its own way (aegis/shield/crs.py): matched only where a value is a file path,
+and scored together with Aegis' own signals rather than as stand-alone rules.

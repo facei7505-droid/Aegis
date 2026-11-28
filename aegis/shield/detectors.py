@@ -15,7 +15,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from urllib.parse import unquote_plus
 
-from . import libinjection
+from . import crs, libinjection
 
 _F = re.IGNORECASE | re.DOTALL
 
@@ -290,6 +290,7 @@ def score_all(value: str) -> tuple[str, float, list[str], dict[str, float]]:
         classes[attack] = score
         if score > best[1]:
             best = (attack, score, [name for name, _ in hits])
+    best = crs.score(texts, classes, best)
     if libinjection.available():
         best = _second_opinion(texts, classes, best)
     return best[0], best[1], best[2], classes
@@ -364,6 +365,8 @@ def analyze(inputs: list[tuple[str, str, str]], threshold: float = 0.8,
             det = Detection("recon", 0.95, ["scanner user-agent"], value, location, name)
         elif location == "path" and PATH_PROBE.search(value):
             det = Detection("recon", 0.85, ["backup, config or repository file probe"], value, location, name)
+        elif location == "path" and (restricted := crs.restricted_path(value)):
+            det = Detection("recon", 0.85, [f"OWASP CRS restricted file {restricted}"], value, location, name)
         else:
             attack, score, signals, classes = score_all(value)
             if location == "header" and name.lower() in URL_HEADERS and attack == "ssrf":
