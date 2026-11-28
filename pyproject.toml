@@ -38,7 +38,7 @@ Homepage = "https://github.com/facei7505-droid/aegis"
 include = ["aegis*"]
 
 [tool.setuptools.package-data]
-aegis = ["gateway_dashboard.html", "edge/fonts/*", "shield/native/libinjection/*", "demo_app/vulnshop/*.py", "demo_app/vulnshop/*.txt", "demo_app/vulnshop/files/*", "demo_app/vulnshop/tools/*"]
+aegis = ["gateway_dashboard.html", "edge/fonts/*", "edge/connectors/*", "shield/native/libinjection/*", "demo_app/vulnshop/*.py", "demo_app/vulnshop/*.txt", "demo_app/vulnshop/files/*", "demo_app/vulnshop/tools/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

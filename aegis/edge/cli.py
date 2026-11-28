@@ -3,6 +3,7 @@
     aegis edge init --telegram-token ... --owner-chat 123 --server-ip 203.0.113.10
     aegis edge add shop.kz --origin 198.51.100.7 --cms wordpress --client "ИП Ромашка"
     aegis edge origin-test shop.kz        # before the client changes DNS
+    aegis edge connector shop.kz          # PHP file for the site: only Aegis may reach it
     aegis edge serve                      # behind Caddy (deploy/)
     aegis edge report shop.kz --month 2026-11
 """
@@ -93,6 +94,12 @@ def register(sub) -> None:
     r.add_argument("domain")
     r.add_argument("--month", default=date.today().strftime("%Y-%m"))
     r.add_argument("--output", default=None)
+    k = cmds.add_parser("connector", help="PHP file for the site's server: origin lock, real IP, editor pass")
+    k.add_argument("domain")
+    k.add_argument("--verify", action="store_true", help="check the installed connector and start relying on it")
+    k.add_argument("--mode", default="enforce", choices=["enforce", "report", "off"],
+                   help="enforce: refuse requests that bypass Aegis (default); report: only mark them")
+    k.add_argument("--output", default=None, help="where to write the file (default: current folder)")
     c = cmds.add_parser("caddyfile", help="print the Caddy config for HTTPS on demand")
     c.add_argument("--email", required=True, help="for Let's Encrypt")
     c.add_argument("--aegis", default="aegis:8080", help="where Caddy reaches Aegis (127.0.0.1:8080 without Docker)")
@@ -211,6 +218,9 @@ def run(args) -> int:
         print(f"{out} ({len(pdf) // 1024} КБ)")
         return 0
 
+    if cmd == "connector":
+        return connector_command(registry, home, args)
+
     if cmd == "caddyfile":
         print(CADDYFILE.format(email=args.email, aegis=args.aegis), end="")
         return 0
@@ -225,6 +235,57 @@ class _Offline:
         from .stats import Stats
         self.settings = Settings.load(home / "settings.json")
         self.stats = Stats(home / "stats")
+
+
+def connector_command(registry, home: Path, args) -> int:
+    from . import connector
+    from ..shield.signing import new_secret
+    from .server import Settings
+
+    site = registry.get(args.domain)
+    if site is None:
+        print(f"aegis edge: нет такого сайта: {args.domain}", file=sys.stderr)
+        return 2
+    if not site.secret:  # sites added before v1.4
+        site = registry.update(site.domain, secret=new_secret())
+
+    if args.verify:
+        check = connector.verify(site)
+        if check.error:
+            print(f"  ✗ сервер сайта не отвечает: {check.error}")
+            return 1
+        if check.signed_answer == "bad-signature":
+            print("  ✗ коннектор стоит, но секрет не совпадает: перезалейте файл из `aegis edge connector "
+                  f"{site.domain}` (или часы сервера сайта сильно спешат/отстают)")
+            return 1
+        if not check.installed:
+            print(f"  ✗ коннектор не найден (ответ сайта {check.signed_status}). Проверьте, что файл подключён.")
+            return 1
+        print(f"  ✓ коннектор отвечает на подписанные запросы Aegis ({check.signed_status})")
+        if check.enforced:
+            print("  ✓ запросы в обход Aegis получают 403: прямой IP сервера больше не лазейка")
+        else:
+            print(f"  ! запросы в обход Aegis пока пропускаются (ответ {check.unsigned_status}): "
+                  "режим report или запрос пришёл с самого сервера")
+        if not site.connector:
+            registry.update(site.domain, connector=True)
+        if site.cms == "wordpress":
+            print("  ✓ редакторы теперь узнаются по подписанному пропуску, поддельная cookie входа не поможет")
+        return 0
+
+    name, source = connector.render(site.cms, site.secret, args.mode)
+    out = Path(args.output or name)
+    out.write_text(source, encoding="utf-8")
+    try:
+        out.chmod(0o640)
+    except OSError:
+        pass
+    print(f"{out}: коннектор для {site.domain} ({site.cms}, режим {args.mode})")
+    print("В файле секрет этого сайта: передавайте его клиенту лично, не в общий чат.\n")
+    print(connector.INSTALL.get(site.cms, connector.INSTALL["generic"]).format(name=name, domain=site.domain))
+    print()
+    print(connector.firewall_rules(Settings.load(home / "settings.json").server_ip))
+    return 0
 
 
 def origin_test(site) -> int:

@@ -52,6 +52,7 @@ class AppSpec:
     preserve_host: bool = False            # customer sites: keep the public Host, TLS to the origin by site name
     tls_verify: bool = True                # check the origin certificate (https:// upstreams)
     sni: str | None = None                 # SNI / certificate name for the origin; default: the public Host
+    origin_secret: str | None = None       # origin lock: sign forwarded requests (shield/signing.py)
 
 
 # ------------------------------------------------------------------ proxy --
@@ -70,7 +71,7 @@ def make_proxy(spec: AppSpec, recorder: TrafficRecorder | None = None) -> Proxy:
         elif status < 400:
             recorder.add(sent.method, sent.target, sent.headers)
 
-    return Proxy(origin, spec.name, on_response=record if recorder is not None else None)
+    return Proxy(origin, spec.name, on_response=record if recorder is not None else None, secret=spec.origin_secret)
 
 
 # ---------------------------------------------------------------- gateway --

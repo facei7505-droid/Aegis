@@ -54,6 +54,8 @@ class ShieldConfig:
     login_limit: int = 0                # login attempts per client inside login_window (0 = off)
     login_window: float = 600.0
     login_lockout: float = 1800.0       # login is refused this long; the rest of the site stays open
+    editor_secret: str | None = None    # the site's connector signs editors (signing.py): forged "signed in"
+                                        # cookies then relax nothing
 
 
 @dataclass
@@ -181,6 +183,10 @@ class ShieldCore:
         if self.policy is not None or cfg.rate_limit or cfg.login_limit:
             from .policy import Request, is_static
             req = Request.build(method, path, inputs)
+            if cfg.editor_secret:
+                from .signing import EDITOR_COOKIE, verify_editor
+                value = next((v for loc, n, v in inputs if loc == "cookie" and n == EDITOR_COOKIE), "")
+                req.editor = verify_editor(cfg.editor_secret, value)
             limited = self._limits(req, client, now, is_static)
             if limited is not None:
                 return limited

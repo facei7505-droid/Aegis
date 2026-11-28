@@ -40,6 +40,9 @@ class Echo(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def do_GET(self):
+        if self.path == "/connector":
+            body = json.dumps({k.lower(): v for k, v in self.headers.items()}).encode()
+            return self._send(200, body, extra=[("X-Aegis-Connector", "ok")])
         if self.path == "/big":
             return self._send(200, b"x" * BIG, "application/octet-stream")
         if self.path == "/cookies":
@@ -237,3 +240,15 @@ def test_silent_clients_are_dropped(origin, monkeypatch):
     finally:
         for s in servers:
             s.shutdown()
+
+
+def test_origin_lock_signs_requests_and_keeps_the_connector_answer_inside(origin):
+    from aegis.shield.signing import verify_origin
+    spec = AppSpec("shop", f"http://127.0.0.1:{origin}", ["shop.kz"], preserve_host=True, heal="off",
+                   origin_secret="s" * 64, options={"trust_proxy": True})
+    resp, body = through(spec, path="/connector", headers={"X-Forwarded-For": "203.0.113.9",
+                                                            "X-Aegis-Auth": "v1.1.forged"})
+    seen = json.loads(body)
+    assert verify_origin("s" * 64, seen["x-aegis-auth"], "shop.kz", "203.0.113.9")
+    assert seen["x-real-ip"] == "203.0.113.9"
+    assert resp.getheader("X-Aegis-Connector") is None

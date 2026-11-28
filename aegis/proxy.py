@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from typing import Callable, Iterator
 from urllib.parse import urlsplit
 
+from .shield.signing import ORIGIN_HEADER, origin_auth
+
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection",
               "te", "trailer", "trailers", "transfer-encoding", "upgrade", "host"}
 CHUNK = 64 * 1024
@@ -76,9 +78,11 @@ class Proxy:
     """Forwards one request to the origin and streams the answer back."""
 
     def __init__(self, origin: Origin, name: str = "site",
-                 on_response: Callable[[dict, str, dict, bytes | None, int, bytes | None], None] | None = None):
+                 on_response: Callable[[dict, str, dict, bytes | None, int, bytes | None], None] | None = None,
+                 secret: str | None = None):
         self.origin = origin
         self.name = name
+        self.secret = secret  # origin lock: sign every request so the site's connector can refuse the rest
         self.on_response = on_response  # (environ, target, headers, body, status, small response body)
         self._verified = ssl.create_default_context()
         self._unverified = ssl.create_default_context()
@@ -103,7 +107,8 @@ class Proxy:
             if key.startswith("HTTP_"):
                 name = key[5:].replace("_", "-").title()
                 low = name.lower()
-                if low in HOP_BY_HOP or low in listed or low in ("x-forwarded-for", "x-real-ip"):
+                if low in HOP_BY_HOP or low in listed or low in ("x-forwarded-for", "x-real-ip") \
+                        or low.startswith("x-aegis-"):  # only Aegis itself may speak for Aegis
                     continue
                 headers[name] = value
         if environ.get("CONTENT_TYPE"):
@@ -118,6 +123,8 @@ class Proxy:
         headers["X-Real-Ip"] = client
         headers["X-Forwarded-Host"] = public_host
         headers["X-Forwarded-Proto"] = environ.get("HTTP_X_FORWARDED_PROTO") or environ.get("wsgi.url_scheme", "http")
+        if self.secret:
+            headers[ORIGIN_HEADER] = origin_auth(self.secret, public_host, client)
         return headers
 
     def _connection(self, environ) -> http.client.HTTPConnection:
@@ -167,8 +174,8 @@ class Proxy:
         public_host = headers.get("X-Forwarded-Host", "")
         for name, value in resp.getheaders():
             low = name.lower()
-            if low in HOP_BY_HOP or low in listed or low == "content-length":
-                continue
+            if low in HOP_BY_HOP or low in listed or low == "content-length" or low.startswith("x-aegis-"):
+                continue  # X-Aegis-Connector is for Aegis, not for visitors
             if low == "location" and not self.origin.preserve_host:
                 value = self._public_location(value, public_host, environ)
             out.append((name, value))

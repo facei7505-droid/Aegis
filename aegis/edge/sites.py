@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ..gateway import AppSpec
 from ..shield.policy import PRESETS
+from ..shield.signing import new_secret
 
 DOMAIN = re.compile(r"^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$")
 PLANS = {"start": "Старт", "business": "Бизнес", "studio": "Студия"}
@@ -51,6 +52,9 @@ class Site:
     rate_limit: int = 300                     # page requests per minute per visitor address
     login_limit: int = 10                     # login attempts per 10 minutes per address
     created: str = ""
+    secret: str = ""                          # signs requests to the origin (origin lock, editor passes)
+    connector: bool = False                   # the site runs the Aegis connector: editors are known by its
+                                              # signed pass, not by a cookie name anyone can send
 
     def __post_init__(self):
         self.domain = normalize_domain(self.domain)
@@ -82,11 +86,14 @@ class Site:
         return [self.domain, *self.aliases]
 
     def to_spec(self, today: date | None = None) -> AppSpec:
+        options = {"preset": self.cms, "rate_limit": self.rate_limit, "login_limit": self.login_limit,
+                   "trust_proxy": True, "proxy_hops": 1, "ban_after": 5, "ban_seconds": 900.0}
+        if self.connector and self.secret:
+            options["editor_secret"] = self.secret
         return AppSpec(
             name=self.domain, upstream=self.origin, hosts=self.hosts(), shield=self.effective_mode(today),
-            heal="off", preserve_host=True, tls_verify=self.tls_verify,
-            options={"preset": self.cms, "rate_limit": self.rate_limit, "login_limit": self.login_limit,
-                     "trust_proxy": True, "proxy_hops": 1, "ban_after": 5, "ban_seconds": 900.0},
+            heal="off", preserve_host=True, tls_verify=self.tls_verify, origin_secret=self.secret or None,
+            options=options,
         )
 
 
@@ -124,6 +131,8 @@ class Registry:
                 raise ValueError(f"уже защищается: {', '.join(clash)}")
             if not site.created:
                 site.created = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if not site.secret:
+                site.secret = new_secret()
             if learn_days and not site.learn_until:
                 site.learn_until = (date.today() + timedelta(days=learn_days)).isoformat()
             sites.append(site)

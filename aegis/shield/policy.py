@@ -55,7 +55,11 @@ class Trust:
     markers: tuple[Marker, ...] = ()
 
     def applies(self, req: "Request") -> bool:
-        return bool(self.path.search(req.route)) and (not self.markers or any(m.present(req) for m in self.markers))
+        if not self.path.search(req.route):
+            return False
+        if self.markers and req.editor is not None:  # the site's connector signs editors: only that counts
+            return req.editor
+        return not self.markers or any(m.present(req) for m in self.markers)
 
     def covers(self, name: str) -> bool:
         low = name.lower()
@@ -109,6 +113,7 @@ class Request:
     cookies: set[str]
     route: str                         # path, or the REST route a CMS reads from the query
     texts: list[str] = field(default_factory=list)  # body and field values (first 64 KB)
+    editor: bool | None = None         # signed editor pass verified (None: the site has no connector)
 
     @classmethod
     def build(cls, method: str, path: str, inputs: list[tuple[str, str, str]]) -> "Request":
