@@ -7,7 +7,7 @@ from aegis.canary import Canary, Recorded, TrafficRecorder, worse, _free_port, _
 from aegis.gateway import AppSpec
 from aegis.models import Incident
 
-SERVER = '''import http.server, sys
+SERVER = '''import http.server, socketserver, sys
 
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -20,7 +20,12 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+class S(http.server.HTTPServer):
+    def server_bind(self):  # no socket.getfqdn(): reverse DNS can stall for seconds on CI runners
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
+
+S(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 '''
 
 
@@ -50,7 +55,7 @@ def run_live(tmp_path):
     (tmp_path / "srv" / "server.py").write_text(app())
     port = _free_port()
     proc = subprocess.Popen([sys.executable, "server.py", str(port)], cwd=tmp_path / "srv")
-    assert _wait(port, 10, proc)
+    assert _wait(port, 30, proc)  # slow CI runners (macOS) can take seconds to start Python
     spec = AppSpec("t", f"http://127.0.0.1:{port}", source=str(tmp_path / "srv"), cwd=str(tmp_path / "srv"),
                    command=[sys.executable, "server.py", "{port}"])
     return proc, spec

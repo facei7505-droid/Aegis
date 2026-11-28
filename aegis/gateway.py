@@ -395,6 +395,14 @@ class _ThreadingServer(socketserver.ThreadingMixIn, WSGIServer):
         self._slots = threading.BoundedSemaphore(self.max_connections)
         super().__init__(*args, **kwargs)
 
+    def server_bind(self):
+        # HTTPServer.server_bind looks the host up with socket.getfqdn(): a reverse DNS query that can
+        # take many seconds on a VPS or CI runner with slow DNS, all before the port starts listening.
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name, self.server_port = str(host), port
+        self.setup_environ()
+
     def process_request(self, request, client_address):
         if not self._slots.acquire(blocking=False):
             self.shutdown_request(request)
