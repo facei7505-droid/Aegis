@@ -137,8 +137,8 @@ def test_locked_site_answers_only_through_aegis(tmp_path):
     (tmp_path / "index.php").write_text("<?php define('AEGIS_TRUST_LOCAL', false); require __DIR__ . '/" + name +
                                         "'; echo 'shop:' . $_SERVER['REMOTE_ADDR'];")
     port = _free_port()
-    srv = subprocess.Popen([PHP, "-S", f"127.0.0.1:{port}", "-t", str(tmp_path)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    srv = subprocess.Popen([PHP, "-S", f"127.0.0.1:{port}", "-t", str(tmp_path)], env={"TMPDIR": str(tmp_path)},
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # own temp dir: no stray failover flag
     try:
         for _ in range(100):
             with socket.socket() as s:
