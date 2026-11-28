@@ -50,6 +50,36 @@ if (!function_exists('aegis_canonical_host')) {
         return isset($_SERVER['SERVER_ADDR']) && $addr === $_SERVER['SERVER_ADDR'];
     }
 
+    /*
+     * Failover: when Aegis is down, the watchdog points DNS straight at this server and first sends a
+     * signed X-Aegis-Failover token. Until it runs out (at most a day; the watchdog renews it while
+     * Aegis stays down) visitors are let in directly, so the site keeps working without protection.
+     */
+    function aegis_failover_flag() {
+        return rtrim(sys_get_temp_dir(), '/\\') . '/aegis-open-' . substr(hash('sha256', AEGIS_SECRET), 0, 16);
+    }
+
+    function aegis_failover() {
+        if (isset($_SERVER['HTTP_X_AEGIS_FAILOVER'])) {
+            $parts = explode('.', (string)$_SERVER['HTTP_X_AEGIS_FAILOVER']);
+            $host = aegis_canonical_host(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '');
+            $ok = count($parts) === 3 && $parts[0] === 'v1' && ctype_digit($parts[1])
+                && (int)$parts[1] > time() && (int)$parts[1] <= time() + 86400
+                && hash_equals(hash_hmac('sha256', 'failover|' . (int)$parts[1] . '|' . $host, AEGIS_SECRET), $parts[2]);
+            if (!headers_sent()) {
+                header('X-Aegis-Connector: ' . ($ok ? 'failover-open' : 'bad-signature'));
+            }
+            if ($ok) {
+                @file_put_contents(aegis_failover_flag(), (string)(int)$parts[1], LOCK_EX);
+                echo 'failover-open';
+                exit;
+            }
+            return false;
+        }
+        $flag = aegis_failover_flag();
+        return is_file($flag) && (int)@file_get_contents($flag) > time();
+    }
+
     function aegis_lock() {
         if (AEGIS_LOCK === 'off' || AEGIS_SECRET === '' || PHP_SAPI === 'cli') {
             return;
@@ -63,6 +93,9 @@ if (!function_exists('aegis_canonical_host')) {
                 header('X-Aegis-Connector: ok');
             }
             return;
+        }
+        if (aegis_failover()) {
+            return;  // Aegis is down: the site stays open (without the visitor address from Aegis)
         }
         $signed = isset($_SERVER['HTTP_X_AEGIS_AUTH']);
         if (!headers_sent() && $signed) {

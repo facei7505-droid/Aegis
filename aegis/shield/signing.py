@@ -73,3 +73,23 @@ def verify_editor(secret: str, value: str, now: float | None = None) -> bool:
     if version != VERSION or not user_id.isdigit() or exp_i < (now if now is not None else time.time()):
         return False
     return hmac.compare_digest(mac, _mac(secret, f"editor|{exp_i}|{user_id}"))
+
+
+FAILOVER_HEADER = "X-Aegis-Failover"
+FAILOVER_MAX = 24 * 3600  # the longest a site can be opened at once
+
+
+def failover_token(secret: str, host: str, until: int) -> str:
+    """Tells the connector to accept direct visitors until `until`: Aegis is down and DNS points at the site."""
+    return f"{VERSION}.{int(until)}.{_mac(secret, f'failover|{int(until)}|{canonical_host(host)}')}"
+
+
+def verify_failover(secret: str, value: str, host: str, now: float | None = None) -> bool:
+    try:
+        version, until, mac = (value or "").split(".")
+    except ValueError:
+        return False
+    now = now if now is not None else time.time()
+    if version != VERSION or not until.isdigit() or not now < int(until) <= now + FAILOVER_MAX:
+        return False
+    return hmac.compare_digest(mac, _mac(secret, f"failover|{int(until)}|{canonical_host(host)}"))

@@ -67,6 +67,7 @@ def register(sub) -> None:
     i.add_argument("--server-ip", default="")
     i.add_argument("--contact", default="", help="shown to clients in reports (@telegram or phone)")
     i.add_argument("--brand", default="Aegis Щит")
+    i.add_argument("--edge-domain", default="", help="your zone for client CNAMEs and failover (e.g. shield.kz)")
 
     a = cmds.add_parser("add", help="protect a site")
     a.add_argument("domain")
@@ -100,6 +101,10 @@ def register(sub) -> None:
     k.add_argument("--mode", default="enforce", choices=["enforce", "report", "off"],
                    help="enforce: refuse requests that bypass Aegis (default); report: only mark them")
     k.add_argument("--output", default=None, help="where to write the file (default: current folder)")
+    cmds.add_parser("failover-export", help="config for the failover watchdog (contains site secrets)")
+    w = cmds.add_parser("watchdog", help="run on a second machine: switch sites to their servers if Aegis dies")
+    w.add_argument("--config", required=True, help="from `aegis edge failover-export`, with your DNS provider filled in")
+    w.add_argument("--once", action="store_true", help="one check, for cron or testing")
     c = cmds.add_parser("caddyfile", help="print the Caddy config for HTTPS on demand")
     c.add_argument("--email", required=True, help="for Let's Encrypt")
     c.add_argument("--aegis", default="aegis:8080", help="where Caddy reaches Aegis (127.0.0.1:8080 without Docker)")
@@ -118,7 +123,7 @@ def run(args) -> int:
         (home / "logs").mkdir(exist_ok=True)
         (home / "stats").mkdir(exist_ok=True)
         settings = Settings.load(home / "settings.json")
-        for key in ("telegram_token", "server_ip", "contact", "brand"):
+        for key in ("telegram_token", "server_ip", "contact", "brand", "edge_domain"):
             value = getattr(args, key)
             if value:
                 setattr(settings, key, value)
@@ -149,11 +154,26 @@ def run(args) -> int:
         ip = settings.server_ip or "<IP этого сервера>"
         print(f"{site.domain}: добавлен ({site.cms}), {site.status_ru()}")
         print("\nПроверьте origin до смены DNS:  aegis edge origin-test " + site.domain)
-        print("\nКлиенту — изменить DNS (у регистратора или хостинга):")
-        for host in site.hosts():
-            label = "@" if host == site.domain else host[: -len(site.domain) - 1]
-            print(f"  A  {label:<6} →  {ip}")
-        print("  (AAAA-записи для этих имён удалить; TTL можно поставить 300)")
+        if settings.edge_domain:
+            from .watchdog import label as failover_label
+            target = f"{failover_label(site.domain)}.{settings.edge_domain}"
+            print(f"\nВам — в своей зоне {settings.edge_domain} (TTL 60):  A  {failover_label(site.domain)}  →  {ip}")
+            print("\nКлиенту — изменить DNS (у регистратора или хостинга):")
+            for host in site.hosts():
+                name = "@" if host == site.domain else host[: -len(site.domain) - 1]
+                if name == "@":
+                    print(f"  @       →  {target}  (ALIAS/ANAME, если регистратор умеет; иначе A @ → {ip},"
+                          " но тогда корень без аварийного переключения)")
+                else:
+                    print(f"  CNAME {name:<6} →  {target}")
+            print("  (AAAA-записи для этих имён удалить)")
+        else:
+            print("\nКлиенту — изменить DNS (у регистратора или хостинга):")
+            for host in site.hosts():
+                name = "@" if host == site.domain else host[: -len(site.domain) - 1]
+                print(f"  A  {name:<6} →  {ip}")
+            print("  (AAAA-записи для этих имён удалить; TTL можно поставить 300)")
+            print("  Совет: aegis edge init --edge-domain <ваш домен> даёт CNAME и аварийное переключение.")
         return 0
 
     if cmd == "list":
@@ -220,6 +240,37 @@ def run(args) -> int:
 
     if cmd == "connector":
         return connector_command(registry, home, args)
+
+    if cmd == "failover-export":
+        import json as _json
+        settings = Settings.load(home / "settings.json")
+        if not settings.edge_domain or not settings.server_ip:
+            print("aegis edge: сначала aegis edge init --edge-domain <зона> --server-ip <IP>", file=sys.stderr)
+            return 2
+        export = {
+            "server": f"https://{settings.server_ip}", "edge_domain": settings.edge_domain,
+            "interval": 30, "fail_after": 3, "recover_after": 5,
+            "dns": {"provider": "cloudflare", "zone_id": "<zone id>", "token": "<API token: Zone.DNS:Edit>"},
+            "telegram": {"token": settings.telegram_token, "chats": settings.owner_chats},
+            "sites": [{"domain": s.domain, "origin": s.origin, "secret": s.secret, "tls_verify": s.tls_verify}
+                      for s in registry.load()],
+        }
+        print(_json.dumps(export, ensure_ascii=False, indent=1))
+        return 0
+
+    if cmd == "watchdog":
+        import json as _json
+        from .watchdog import from_config
+        dog = from_config(_json.loads(Path(args.config).read_text(encoding="utf-8")))
+        print(f"watchdog: {len(dog.sites)} сайт(ов), Aegis {dog.server}, зона {dog.edge_domain}", flush=True)
+        if args.once:
+            print(dog.tick())
+            return 0
+        try:
+            dog.run()
+        except KeyboardInterrupt:
+            pass
+        return 0
 
     if cmd == "caddyfile":
         print(CADDYFILE.format(email=args.email, aegis=args.aegis), end="")

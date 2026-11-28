@@ -165,6 +165,9 @@ class Gateway:
         if path in ("/_aegis/tls-ask", "/_aegis/health") and host not in self.by_host \
                 and _private(environ.get("REMOTE_ADDR", "")):
             return self._service(path, environ, start_response)
+        if path == "/_aegis/ping" and host in self.by_host:  # liveness for the failover watchdog; says nothing else
+            start_response("204 No Content", [("X-Aegis-Edge", "alive"), ("Cache-Control", "no-store")])
+            return [b""]
         try:
             port = int(environ.get("SERVER_PORT") or 0)
         except ValueError:

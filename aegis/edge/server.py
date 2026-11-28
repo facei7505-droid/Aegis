@@ -30,6 +30,7 @@ class Settings:
     telegram_token: str = ""
     owner_chats: list[int] = field(default_factory=list)   # you: every site, every command
     server_ip: str = ""                                    # shown in DNS instructions
+    edge_domain: str = ""                                  # your zone for failover names: shop-kz.<edge_domain>
     brand: str = "Aegis Щит"
     contact: str = ""                                      # shown to clients in reports (@telegram, phone)
     retention_days: int = 90
