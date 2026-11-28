@@ -151,20 +151,27 @@ def test_generic_logins_count_any_password_form():
     assert results[3] == 429
 
 
-def test_rate_limit_counts_pages_fully_and_files_a_quarter(monkeypatch):
+def test_rate_limit_counts_pages_not_files(monkeypatch):
+    """The WordPress block editor alone loads a hundred scripts: real files must not eat the page budget."""
     monkeypatch.setattr(core_mod.time, "time", lambda: 2_000_000.0)
     core = shield(preset="generic", rate_limit=20)
-    assert not any(check(core, "GET", f"/static/app.{i}.js").blocked for i in range(40))   # 40 files = 10 pages
-    pages = [check(core, "GET", f"/catalog?page={i}") for i in range(15)]
-    assert [v.blocked for v in pages].index(True) == 10 and pages[10].status == 429 and pages[10].retry_after > 0
+    assert not any(check(core, "GET", f"/static/app.{i}.js").blocked for i in range(100))
+    pages = [check(core, "GET", f"/catalog?page={i}") for i in range(25)]
+    assert [v.blocked for v in pages].index(True) == 20 and pages[20].status == 429 and pages[20].retry_after > 0
 
 
-def test_a_flood_of_fake_files_is_still_a_flood(monkeypatch):
-    """A CMS answers /any/x.css with a full dynamic 404: such requests must not be free."""
+def test_a_flood_of_made_up_files_is_still_a_flood(monkeypatch):
+    """A CMS answers /any/x.css with a full dynamic 404: the gateway charges those as pages."""
+    from aegis.gateway import ResponseGuard
     monkeypatch.setattr(core_mod.time, "time", lambda: 2_000_000.0)
-    core = shield(preset="wordpress", rate_limit=300)
-    verdicts = [check(core, "GET", f"/p{i}.css") for i in range(1300)]
-    assert verdicts[1199].blocked is False and verdicts[1200].status == 429
+    core = shield(preset="wordpress", rate_limit=20)
+    guard = ResponseGuard(core)
+    environ = {"aegis.client_ip": "203.0.113.7", "REQUEST_METHOD": "GET"}
+    for i in range(20):
+        assert not check(core, "GET", f"/p{i}.css").blocked
+        guard(environ, f"/p{i}.css", {}, None, 404, b"<html>Page not found</html>", None, True)
+    assert check(core, "GET", "/").status == 429
+    assert not check(core, "GET", "/", client="198.51.100.3").blocked
 
 
 def test_monitor_mode_records_limits_without_blocking():

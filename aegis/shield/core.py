@@ -63,7 +63,7 @@ class ShieldConfig:
     profile_path: str | None = None     # keep the learned traffic profile here (JSON) across restarts
     strict_paths: bool = False          # once learned, also flag paths never seen (good for closed apps and APIs)
     preset: str | None = None           # site policy: generic | wordpress | bitrix | opencart (see policy.py)
-    rate_limit: int = 0                 # page requests per minute per client (a static file counts 1/4; 0 = off)
+    rate_limit: int = 0                 # page requests per minute per client (files only when they 404; 0 = off)
     login_limit: int = 0                # login attempts per client inside login_window (0 = off)
     login_window: float = 600.0
     login_lockout: float = 1800.0       # login is refused this long; the rest of the site stays open
@@ -205,6 +205,7 @@ class ShieldCore:
                     return Verdict(cfg.mode == "block", banned=True)
 
         t0 = time.perf_counter()
+        cpu0 = time.thread_time()  # this thread's CPU: waiting for other threads (GIL) is not the client's cost
         req = None
         if cfg.preset:  # a PHP site: judge fields under the names PHP gives them
             from .policy import php_name
@@ -240,8 +241,9 @@ class ShieldCore:
         if det is None and self.profile is not None:
             det = self._profile(path, inputs)
         detect_ms = (time.perf_counter() - t0) * 1000
-        if cfg.rate_limit and detect_ms > CHARGE_MS:
-            self._charge(client, now, detect_ms)
+        cpu_ms = (time.thread_time() - cpu0) * 1000
+        if cfg.rate_limit and cpu_ms > CHARGE_MS:
+            self._charge(client, now, cpu_ms)
         if det is None:
             return Verdict(False)
         return self._incident(det, client, method, path, now, detect_ms)
@@ -251,18 +253,26 @@ class ShieldCore:
         """Expensive inspection counts toward the rate limit: every CHARGE_MS of it is one more page. A page
         takes well under a millisecond; 64 KB built to be slow takes a few hundred, so such requests run
         into the limit after a handful instead of costing a CPU core per attacker."""
+        self.charge(client, detect_ms / CHARGE_MS, now)
+
+    def charge(self, client: str, pages: float, now: float | None = None) -> None:
+        """Count extra page views against a client's rate window (expensive inspection, fake files)."""
+        if not self.config.rate_limit:
+            return
+        now = now if now is not None else time.time()
         with self._lock:
             window = self._rate.get(client)
-            if window is not None and now - window[0] < 60:
-                window[1] += detect_ms / CHARGE_MS
+            if window is None or now - window[0] >= 60:
+                window = self._rate[client] = [now, 0.0, False]
+            window[1] += pages
     def _limits(self, req, client: str, now: float, static) -> Verdict | None:
         """Login lockouts and request-rate limits. Both answer 429 and never ban the whole address."""
         cfg = self.config
         block = cfg.mode == "block"
-        if cfg.rate_limit:
-            # Static files count a quarter: a page pulls in dozens of them, but a flood of /any/x.css (which a
-            # CMS answers with a full dynamic 404) must not be free.
-            weight = 0.25 if static(req.route) else 1.0
+        if cfg.rate_limit and not static(req.route):
+            # Files are free here (the block editor alone pulls in a hundred scripts); the gateway charges the
+            # ones the site answers with 404, since a CMS renders those as full pages (charge()).
+            weight = 1.0
             with self._lock:
                 window = self._rate.get(client)
                 if window is None or now - window[0] >= 60:

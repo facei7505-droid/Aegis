@@ -110,6 +110,10 @@ class ResponseGuard:
         return any(mark in raw.lower() for mark in ("..", "%2e", "%2f", "%5c", "\\"))
 
     def __call__(self, environ, target, headers, body, status, data, encoding, complete):
+        if status == 404 and is_static(normalize_path(target.split("?")[0])):
+            # Rate limits let files through free, but a CMS answers /any/x.css with a full dynamic 404 page:
+            # those count as pages, so a flood of made-up file names is still a flood.
+            self.core.charge(environ.get("aegis.client_ip") or environ.get("REMOTE_ADDR", ""), 1.0)
         if not complete:  # already sent: read it later, off the request thread
             self._later((dict(environ), target, headers, body, status, data, encoding))
             return None
