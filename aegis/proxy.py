@@ -29,6 +29,13 @@ HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authoriza
               "te", "trailer", "trailers", "transfer-encoding", "upgrade", "host"}
 CHUNK = 64 * 1024
 KEEP_FOR_REPLAY = 512 * 1024  # bodies above this are streamed and not recorded
+TAP_BYTES = 256 * 1024        # start of a streamed answer the response guard reads
+TEXT_TYPES = ("text/html", "text/plain", "application/json", "text/xml", "application/xml", "application/xhtml")
+
+
+def _textual(content_type: str | None, encoding: str) -> bool:
+    ctype = (content_type or "").lower()
+    return ctype.startswith(TEXT_TYPES) and encoding.strip().lower() in ("", "identity", "gzip", "x-gzip", "deflate")
 
 ERROR_PAGE = """<!DOCTYPE html><html lang="ru"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{title}</title>
@@ -79,10 +86,13 @@ class Proxy:
 
     def __init__(self, origin: Origin, name: str = "site",
                  on_response: Callable[[dict, str, dict, bytes | None, int, bytes | None], None] | None = None,
-                 secret: str | None = None):
+                 secret: str | None = None, guard: Callable | None = None):
         self.origin = origin
         self.name = name
         self.secret = secret  # origin lock: sign every request so the site's connector can refuse the rest
+        # guard(environ, target, request headers, request body, status, body or its start, content encoding,
+        #       complete) -> replacement (status line, headers, body) or None. See shield/response.py.
+        self.guard = guard
         self.on_response = on_response  # (environ, target, headers, body, status, small response body)
         self._verified = ssl.create_default_context()
         self._unverified = ssl.create_default_context()
@@ -125,6 +135,11 @@ class Proxy:
         headers["X-Forwarded-Proto"] = environ.get("HTTP_X_FORWARDED_PROTO") or environ.get("wsgi.url_scheme", "http")
         if self.secret:
             headers[ORIGIN_HEADER] = origin_auth(self.secret, public_host, client)
+        if self.guard is not None and headers.get("Accept-Encoding"):
+            # Answers are read for leaks: ask only for encodings Python can read (Caddy compresses for visitors).
+            readable = [t for t in headers["Accept-Encoding"].split(",")
+                        if t.split(";")[0].strip().lower() in ("gzip", "deflate", "identity")]
+            headers["Accept-Encoding"] = ", ".join(t.strip() for t in readable) or "identity"
         return headers
 
     def _connection(self, environ) -> http.client.HTTPConnection:
@@ -189,10 +204,18 @@ class Proxy:
             return [b""]
 
         known = size is not None and size.isdigit()
-        if self.on_response is not None and known and int(size) <= KEEP_FOR_REPLAY:
+        encoding = resp.getheader("Content-Encoding") or ""
+        textual = self.guard is not None and _textual(resp.getheader("Content-Type"), encoding)
+        if (self.on_response is not None or textual) and known and int(size) <= KEEP_FOR_REPLAY:
             data = resp.read()
             conn.close()
             self._report(environ, target, headers, body, resp.status, data)
+            if textual:
+                replacement = self._guard(environ, target, headers, body, resp.status, data, encoding, True)
+                if replacement is not None:
+                    status_line, replaced_headers, page = replacement
+                    start_response(status_line, replaced_headers)
+                    return [page]
             out.append(("Content-Length", str(len(data))))
             start_response(f"{resp.status} {resp.reason}", out)
             return [data]
@@ -200,7 +223,17 @@ class Proxy:
             out.append(("Content-Length", size))
         self._report(environ, target, headers, body, resp.status, None)
         start_response(f"{resp.status} {resp.reason}", out)
-        return _Stream(resp, conn)
+        tap = None
+        if textual:  # too big or streamed: read its start on the way through (alerts only, it is already sent)
+            def tap(prefix: bytes):
+                self._guard(environ, target, headers, body, resp.status, prefix, encoding, False)
+        return _Stream(resp, conn, tap)
+
+    def _guard(self, *args):
+        try:
+            return self.guard(*args)
+        except Exception:  # inspection must never break the response
+            return None
 
     def _report(self, environ, target, headers, body, status, data):
         if self.on_response is not None:
@@ -222,18 +255,25 @@ class Proxy:
 class _Stream:
     """WSGI response iterable: chunks from the origin, connection closed when done or abandoned."""
 
-    def __init__(self, resp: http.client.HTTPResponse, conn: http.client.HTTPConnection):
-        self.resp, self.conn = resp, conn
+    def __init__(self, resp: http.client.HTTPResponse, conn: http.client.HTTPConnection,
+                 tap: Callable[[bytes], None] | None = None):
+        self.resp, self.conn, self.tap = resp, conn, tap
 
     def __iter__(self) -> Iterator[bytes]:
+        seen = bytearray()
         try:
             while True:
                 chunk = self.resp.read1(CHUNK) if hasattr(self.resp, "read1") else self.resp.read(CHUNK)
                 if not chunk:
                     break
+                if self.tap is not None and len(seen) < TAP_BYTES:
+                    seen += chunk[:TAP_BYTES - len(seen)]
                 yield chunk
         finally:
             self.close()
+            if self.tap is not None and seen:
+                tap, self.tap = self.tap, None
+                tap(bytes(seen))
 
     def close(self):
         try:

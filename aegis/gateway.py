@@ -59,7 +59,40 @@ class AppSpec:
 
 # ------------------------------------------------------------------ proxy --
 
-def make_proxy(spec: AppSpec, recorder: TrafficRecorder | None = None) -> Proxy:
+def response_guard(core: ShieldCore) -> Callable:
+    """The proxy's response hook for one app: leaks and confirmed attacks in the origin's answers."""
+    from .shield.core import Verdict, block_response
+    from .shield.response import decode, examine, request_fields
+    seen: dict[tuple[str, str], float] = {}  # (kind, page) -> last report: an error on every page is one alert
+
+    def guard(environ, target, headers, body, status, data, encoding, complete):
+        text = decode(data, encoding)
+        if not text:
+            return None
+        fields = request_fields(target, body, headers.get("Content-Type", ""))
+        finding = examine(text, fields)
+        if finding is None:
+            return None
+        page = target.split("?")[0]
+        if not finding.block:
+            now = time.time()
+            if now - seen.get((finding.kind, page), 0) < 3600:
+                return None
+            if len(seen) > 5000:
+                seen.clear()
+            seen[(finding.kind, page)] = now
+        client = environ.get("aegis.client_ip") or environ.get("REMOTE_ADDR", "")
+        incident = core.report_response(finding, client, environ.get("REQUEST_METHOD", "GET"), page, fields)
+        if not (complete and incident.blocked):
+            return None
+        ctype, payload = block_response(Verdict(True, incident), environ.get("HTTP_ACCEPT", ""))
+        return "403 Forbidden", [("Content-Type", ctype), ("Content-Length", str(len(payload))),
+                                 ("Cache-Control", "no-store")], payload
+
+    return guard
+
+
+def make_proxy(spec: AppSpec, recorder: TrafficRecorder | None = None, guard: Callable | None = None) -> Proxy:
     """The proxy for one app; with a recorder, clean traffic and attack answers are kept for the canary."""
     origin = Origin(spec.upstream, preserve_host=spec.preserve_host, tls_verify=spec.tls_verify, sni=spec.sni)
 
@@ -73,7 +106,8 @@ def make_proxy(spec: AppSpec, recorder: TrafficRecorder | None = None) -> Proxy:
         elif status < 400:
             recorder.add(sent.method, sent.target, sent.headers)
 
-    return Proxy(origin, spec.name, on_response=record if recorder is not None else None, secret=spec.origin_secret)
+    return Proxy(origin, spec.name, on_response=record if recorder is not None else None, secret=spec.origin_secret,
+                 guard=guard)
 
 
 # ---------------------------------------------------------------- gateway --
@@ -125,10 +159,13 @@ class Gateway:
         options = {k: v for k, v in spec.options.items() if k in ShieldConfig.__dataclass_fields__}
         if options.get("learn") and log_dir and "profile_path" not in options:
             options["profile_path"] = str(Path(log_dir) / f"{spec.name}.profile.json")
+        if log_dir and "learned_path" not in options:
+            options["learned_path"] = str(Path(log_dir) / f"{spec.name}.learned.json")
         config = ShieldConfig(mode=spec.shield, log_path=log, **options)
-        # Only apps that can heal need recorded traffic (the canary); other responses are streamed.
-        proxy = make_proxy(spec, recorder if spec.name in self.healers else None)
         core = ShieldCore(config, callbacks, shared=self.shared_bans, name=spec.name)
+        guard = response_guard(core) if config.inspect_responses else None
+        # Only apps that can heal need recorded traffic (the canary); other responses are streamed.
+        proxy = make_proxy(spec, recorder if spec.name in self.healers else None, guard)
         shield = AegisShield(proxy, core=core)
         self.shields[spec.name] = shield
         self.requests.setdefault(spec.name, 0)

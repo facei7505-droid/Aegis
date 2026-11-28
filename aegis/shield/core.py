@@ -56,6 +56,8 @@ class ShieldConfig:
     login_lockout: float = 1800.0       # login is refused this long; the rest of the site stays open
     editor_secret: str | None = None    # the site's connector signs editors (signing.py): forged "signed in"
                                         # cookies then relax nothing
+    inspect_responses: bool = True      # read the origin's answers (response.py): leaks, confirmed attacks
+    learned_path: str | None = None     # keep fields proven injectable here (JSON) across restarts
 
 
 @dataclass
@@ -90,6 +92,8 @@ class ShieldCore:
         self._rate: dict[str, list] = {}               # client -> [window start, count]
         self._logins: dict[str, deque] = defaultdict(deque)
         self._locked: dict[str, float] = {}             # client -> login lockout end
+        from .response import LearnedPatches
+        self.learned = LearnedPatches(self.config.learned_path)
         self.profile = None
         if self.config.learn or self.config.profile_path:
             from .profile import TrafficProfile
@@ -203,6 +207,14 @@ class ShieldCore:
                 det = Detection("virtual_patch", 1.0, [patch.name, patch.reason], req.route, "path", patch.name,
                                 {"virtual_patch": 1.0})
                 return self._incident(det, client, method, path, now, (time.perf_counter() - t0) * 1000)
+        if len(self.learned):
+            from .policy import normalize_path as _norm
+            fields = {n: v for loc, n, v in inputs if loc in ("query", "form", "json", "multipart")}
+            learned = self.learned.check(req.route if req is not None else _norm(path), fields)
+            if learned is not None:
+                det = Detection("injection_point", 1.0, ["confirmed injection point", learned["field"]],
+                                fields.get(learned["field"], ""), "query", learned["field"], {"injection_point": 1.0})
+                return self._incident(det, client, method, path, now, (time.perf_counter() - t0) * 1000)
         ignore = self.policy.ignored(req) if (self.policy is not None and req is not None) else None
         det = analyze(inputs, cfg.threshold, cfg.relaxed_params, cfg.relaxed_threshold, ignore)
         if det is None and oversized and cfg.block_oversized:
@@ -267,6 +279,29 @@ class ShieldCore:
                                retry_after=int(cfg.login_lockout)) if block else None
         return None
 
+    def report_response(self, finding, client: str, method: str, path: str, fields: dict[str, str]):
+        """The origin's answer showed a leak or a working attack (response.py). Returns the incident."""
+        from .policy import normalize_path
+        now = time.time()
+        kind = finding.kind
+        route = normalize_path(path.split("?")[0])
+        if fields.get("rest_route"):  # WordPress serves the REST API on any URL
+            route = "/wp-json" + normalize_path(fields["rest_route"])
+        if kind == "sql_error" and finding.fields:
+            for name in finding.fields:
+                self.learned.learn(route, name, fields.get(name, ""), finding.evidence)
+            attack, signals = "injection_point", ["confirmed injection point", ", ".join(finding.fields),
+                                                  finding.evidence]
+            value, param = fields.get(finding.fields[0], ""), finding.fields[0]
+        elif kind in ("system_file", "web_shell"):
+            attack, signals, value, param = "exploit_confirmed", [kind, finding.evidence], finding.evidence, kind
+        else:
+            attack, signals, value, param = "data_leak", [kind, finding.evidence], finding.evidence, kind
+        det = Detection(attack, 1.0, signals, value, "response", param, {attack: 1.0})
+        strike = attack in ("injection_point", "exploit_confirmed")
+        blocked = finding.block and self.config.mode == "block"
+        return self._incident(det, client, method, path, now, 0.0, strike=strike, blocked=blocked).incident
+
     def unlock(self, client: str) -> bool:
         """Lift every block on an address (ban, login lockout, rate window). True if one was active."""
         with self._lock:
@@ -283,9 +318,9 @@ class ShieldCore:
 
     # --------------------------------------------------------- incidents --
     def _incident(self, det: Detection, client: str, method: str, path: str, now: float, detect_ms: float,
-                  strike: bool = True) -> Verdict:
+                  strike: bool = True, blocked: bool | None = None) -> Verdict:
         cfg = self.config
-        blocked = cfg.mode == "block"
+        blocked = cfg.mode == "block" if blocked is None else blocked
         incident = Incident(
             id=uuid.uuid4().hex[:12], timestamp=now, client=client, method=method, path=path,
             location=det.location, param=det.param, payload=mask(det.param, det.value)[:500],
@@ -390,6 +425,9 @@ REASONS_RU = {
     "recon": "сканирование уязвимостей", "header_injection": "подмена заголовков", "xxe": "атака через XML",
     "format_string": "атака через строку формата", "anomaly": "необычный запрос", "brute_force": "подбор пароля",
     "rate_limit": "слишком много запросов", "virtual_patch": "обращение к закрытому адресу",
+    "injection_point": "атака на поле, через которое доступна база данных (подтверждено ответом сайта)",
+    "exploit_confirmed": "атака удалась: сайт отдал системные данные или работает веб-шелл",
+    "data_leak": "сайт показывает посетителям технические ошибки",
 }
 
 BLOCK_PAGE = """<!DOCTYPE html><html lang="ru"><meta charset="utf-8">
